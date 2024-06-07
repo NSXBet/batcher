@@ -224,7 +224,7 @@ func runBench(b *testing.B, batchSize int) {
 	b.StopTimer()
 
 	batch := batcher.New(
-		batcher.WithProcessor(func(items []test.BatchItem) error {
+		batcher.WithProcessor(func(_ []test.BatchItem) error {
 			return nil
 		}),
 		batcher.WithBatchSize[test.BatchItem](batchSize),
