@@ -1,0 +1,6 @@
+---
+extends: default
+rules:
+  document-start: enable
+  line-length: disable
+  truthy: disable

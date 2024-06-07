@@ -34,7 +34,7 @@ func main() {
         }),
     )
     // stop the batcher
-    defer batcher.StopProcessing()
+    defer batcher.Close()
 
     // add operations to the batcher
     for i := 0; i < 1000; i++ {
@@ -48,6 +48,8 @@ func main() {
     timeout := 10 * time.Second
     if err := batcher.Join(timeout); err != nil {
         fmt.Printf("timeout error: %v\n", err)
+
+        return
     }
 
     // You should see something like (10 times):
