@@ -35,9 +35,7 @@ jobs:
       - uses: brian-pickens/go-test-report@v1
         with:
           packages: "./..."
-          reports-only: "false"
           summary: "true"
-          GO111MODULE: "auto"
   coverage:
     permissions:
       contents: write
