@@ -178,7 +178,7 @@ func TestCanCloseBatcher(t *testing.T) {
 func TestCanHandleErrors(t *testing.T) {
 	// ARRANGE
 	b := batcher.New(
-		batcher.WithProcessor(func(items []test.BatchItem) error {
+		batcher.WithProcessor(func(_ []test.BatchItem) error {
 			return fmt.Errorf("error")
 		}),
 		batcher.WithBatchSize[test.BatchItem](10),

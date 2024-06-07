@@ -103,7 +103,7 @@ You can also use a struct in order to have access to any dependencies you requir
 ```go
 // 1. Create a Processor struct with all the dependencies you need.
 type Processor struct {
-	logger *zap.Logger
+    logger *zap.Logger
 }
 
 func NewProcessor() (*Processor, error) {
@@ -209,7 +209,7 @@ Just run `make bench` to run all benchmarks.
 
 Our benchmarks are divided by batch size and should look like this (actual results depend on your machine):
 
-```
+```bash
 Running benchmarks...
 2024-06-07T00:21:10.619-0300    INFO    test/helpers.go:30        processing items {"count": 1000}
 goos: linux
