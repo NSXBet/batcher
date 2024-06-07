@@ -17,7 +17,7 @@ func NoOpProcessor[T any]([]T) error {
 	return nil
 }
 
-type BatcherConfig[T any] struct {
+type Config[T any] struct {
 	BatchSize     int
 	BatchInterval time.Duration
 	Concurrency   int
@@ -25,7 +25,7 @@ type BatcherConfig[T any] struct {
 }
 
 type Batcher[T any] struct {
-	config *BatcherConfig[T]
+	config *Config[T]
 
 	isClosed       bool
 	closeOnce      sync.Once
@@ -39,7 +39,7 @@ type Batcher[T any] struct {
 // New creates a new Batcher with the given options.
 func New[T any](options ...Option[T]) *Batcher[T] {
 	b := &Batcher[T]{
-		config: &BatcherConfig[T]{
+		config: &Config[T]{
 			BatchSize:     DefaultBatchSize,
 			BatchInterval: DefaultBatchInterval,
 			Concurrency:   DefaultConcurrency,
@@ -65,7 +65,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	return b
 }
 
-func (b *Batcher[T]) Config() *BatcherConfig[T] {
+func (b *Batcher[T]) Config() *Config[T] {
 	return b.config
 }
 

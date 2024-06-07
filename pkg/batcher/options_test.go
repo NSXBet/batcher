@@ -18,7 +18,7 @@ func TestWithProcessor(t *testing.T) {
 		processor batcher.Processor[test.BatchItem]
 	)
 
-	processor = func(items []test.BatchItem) error {
+	processor = func(_ []test.BatchItem) error {
 		return nil
 	}
 

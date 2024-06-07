@@ -32,7 +32,7 @@ func TestCanCreateBatcherWithDefaultConfig(t *testing.T) {
 
 func TestCanCreateBatcher(t *testing.T) {
 	// ARRANGE
-	noop := func(items []test.BatchItem) error {
+	noop := func(_ []test.BatchItem) error {
 		return nil
 	}
 
