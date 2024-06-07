@@ -44,7 +44,7 @@ jobs:
           GO111MODULE: "auto"
   coverage:
     permissions:
-      contents: read
+      contents: write
       packages: read
       # To report GitHub Actions status checks
       statuses: write
