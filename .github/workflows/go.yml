@@ -23,8 +23,38 @@ jobs:
           go-version: '1.21'
       - name: Build
         run: go build -v ./...
-      - name: Test
-        run: make test
+  test:
+    permissions:
+      contents: read
+      packages: read
+      # To report GitHub Actions status checks
+      statuses: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+      - uses: brian-pickens/go-test-report@v1
+        with:
+          packages: "./..."
+          reports-only: "false"
+          summary: "true"
+          GO111MODULE: "auto"
+  coverage:
+    permissions:
+      contents: read
+      packages: read
+      # To report GitHub Actions status checks
+      statuses: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
       - uses: gwatts/go-coverage-action@v2
         id: coverage
         with:
@@ -38,6 +68,19 @@ jobs:
           go run github.com/nikolaydubina/go-cover-treemap@latest \
           -coverprofile ${{ steps.coverage.outputs.gocov-agg-pathname }} \
           -only-folders=true >/tmp/treemap.svg
+  lint:
+    permissions:
+      contents: read
+      packages: read
+      # To report GitHub Actions status checks
+      statuses: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
       - name: Super-linter
         uses: super-linter/super-linter@v6.6.0 # x-release-please-version
         env:
