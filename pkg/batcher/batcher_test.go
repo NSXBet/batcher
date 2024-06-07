@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NSXBet/batcher/internal/test"
 	"github.com/NSXBet/batcher/pkg/batcher"
-	"github.com/NSXBet/batcher/test"
 	"github.com/stretchr/testify/require"
 )
 
