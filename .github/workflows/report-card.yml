@@ -1,0 +1,15 @@
+---
+name: Report Card Reporting
+on:
+  push:
+    branches: ["main"]
+permissions: read-all
+jobs:
+  report-card:
+    permissions:
+      contents: read
+      statuses: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Go Report Card
+        uses: creekorful/goreportcard-action@v1.0

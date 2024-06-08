@@ -1,6 +1,6 @@
 .PHONY: all clean
 
-all: clean test
+all: clean test coverage lint
 
 clean:
 	@rm -f build
@@ -15,11 +15,18 @@ bench:
 	@echo "Running benchmarks..."
 	@go test -bench=. ./...
 
-coverage:
+coverage: coverage-run coverage-report
+
+coverage-run:
 	@echo "Running coverage tests..."
 	@go test -coverprofile=coverage.out ./...
+
+coverage-report:
 	@cat coverage.out | grep -v "test/" > coverage-filtered.out
 	@go tool cover -func=coverage-filtered.out
+
+coverage-report-ci: coverage-run
+	@cat coverage.out | grep -v "test/" > coverage.txt
 
 lint:
 	@docker run \
