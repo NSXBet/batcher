@@ -1,6 +1,4 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
+---
 name: Go
 on:
   push:
@@ -40,7 +38,9 @@ jobs:
   coverage:
     permissions:
       contents: write
-      packages: read
+      checks: write
+      issues: write
+      pull-requests: write
       # To report GitHub Actions status checks
       statuses: write
     runs-on: ubuntu-latest
@@ -70,10 +70,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v4
+        with:
+          fetch-depth: 0
       - name: Super-linter
-        uses: super-linter/super-linter@v6.6.0 # x-release-please-version
+        uses: super-linter/super-linter@v6.6.0
         env:
           # To report GitHub Actions status checks
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
