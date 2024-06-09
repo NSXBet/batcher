@@ -215,6 +215,10 @@ We strive to have 100% test coverage, but for now we're close to 95%. It will do
 
 Just run `make bench` to run all benchmarks.
 
+For the most up-to-date benchmarks in this repository, you can access [this
+page](https://nsxbet.github.io/batcher/dev/bench/). These results are run every time someone merges a PR into the main
+branch.
+
 Our benchmarks are divided by batch size and should look like this (actual results depend on your machine):
 
 ```bash
