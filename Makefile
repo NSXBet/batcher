@@ -11,8 +11,12 @@ unit:
 	@echo "Running unit tests..."
 	@go test -v ./...
 
-bench:
+bench: bench-announce bench-run
+
+bench-announce:
 	@echo "Running benchmarks..."
+
+bench-run:
 	@go test -bench=. ./...
 
 coverage: coverage-run coverage-report
