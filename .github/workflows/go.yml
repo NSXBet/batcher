@@ -64,6 +64,8 @@ jobs:
           ignore-pattern: |
             \.pb\.go$
             \_string\.go$
+            \main\.go$
+            \internal\/test\/.*$
       - name: Generate coverage tree map
         run: |
           go run github.com/nikolaydubina/go-cover-treemap@latest \
