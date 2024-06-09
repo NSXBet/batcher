@@ -48,6 +48,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set up Go
         uses: actions/setup-go@v4
+      - name: Set up Node.js (for coverage)
+        uses: actions/setup-node@master
+        with:
+          node-version: '12'
+      - name: setup tsc
+        run: npm install -g typescript
+      - name: Gather dependencies
+        run: go mod download
       - uses: gwatts/go-coverage-action@v2
         id: coverage
         with:
@@ -61,6 +69,14 @@ jobs:
           go run github.com/nikolaydubina/go-cover-treemap@latest \
           -coverprofile ${{ steps.coverage.outputs.gocov-agg-pathname }} \
           -only-folders=true >/tmp/treemap.svg
+      - uses: paambaati/codeclimate-action@v6.0.0
+        env:
+          CC_TEST_REPORTER_ID: ${{ secrets.CODECLIMATE_TOKEN }}
+        with:
+          coverageCommand: make coverage-report-ci
+          prefix: github.com/NSXBet/batcher
+          coverageLocations: |
+            ${{github.workspace}}/coverage.txt:gocov
   lint:
     permissions:
       contents: read
@@ -79,3 +95,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VALIDATE_GO: false
           VALIDATE_JSCPD: false
+  go-action-detection:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout Repository'
+        uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+        with:
+          go-version: ">=1.22.0"
+      - name: Run snapshot action
+        uses: actions/go-dependency-submission@v2
+        with:
+          go-mod-path: go.mod

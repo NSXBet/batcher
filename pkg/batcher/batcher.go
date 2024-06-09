@@ -2,6 +2,7 @@ package batcher
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -121,13 +122,19 @@ func (b *Batcher[T]) Errors() <-chan error {
 }
 
 func (b *Batcher[T]) Close() error {
+	var clErr error
+
 	b.closeOnce.Do(func() {
+		timeout := time.Duration(2*2*math.Ceil(float64(b.Len())/float64(b.config.BatchSize))) *
+			b.config.BatchInterval
+		clErr = b.Join(timeout)
+
 		close(b.doneChan)
+
+		b.isClosed = true
 	})
 
-	b.isClosed = true
-
-	return nil
+	return clErr
 }
 
 func (b *Batcher[T]) IsClosed() bool {
