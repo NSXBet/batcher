@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1717898118311,
+  "lastUpdate": 1717905046510,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -54,6 +54,60 @@ window.BENCHMARK_DATA = {
             "value": 583.2,
             "unit": "ns/op",
             "extra": "1931379 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "heynemann@gmail.com",
+            "name": "Bernardo Heynemann",
+            "username": "heynemann"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c5f37d7e1b1a71b57e310ea74bebac6ffd596a90",
+          "message": "feat: goreleaser (#4)",
+          "timestamp": "2024-06-09T04:49:55+01:00",
+          "tree_id": "a2b19e3bb10beaf24fc6346846d3fe1e334e2966",
+          "url": "https://github.com/NSXBet/batcher/commit/c5f37d7e1b1a71b57e310ea74bebac6ffd596a90"
+        },
+        "date": 1717905045566,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 567.2,
+            "unit": "ns/op",
+            "extra": "2094282 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 613.3,
+            "unit": "ns/op",
+            "extra": "2119461 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 592.6,
+            "unit": "ns/op",
+            "extra": "1841883 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 616.1,
+            "unit": "ns/op",
+            "extra": "1813833 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 626.9,
+            "unit": "ns/op",
+            "extra": "1937396 times\n4 procs"
           }
         ]
       }
