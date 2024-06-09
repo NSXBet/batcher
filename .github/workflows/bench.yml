@@ -13,7 +13,7 @@ jobs:
         with:
           go-version: "stable"
       - name: Run benchmark
-        run: make bench-run | tee build/output.txt
+        run: make ensure-build bench-run | tee build/output.txt
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:

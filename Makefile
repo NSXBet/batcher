@@ -3,7 +3,10 @@
 all: clean test coverage lint
 
 clean:
-	@rm -f build
+	@rm -f ./build
+
+ensure-build:
+	@mkdir -p ./build
 
 test: unit
 
