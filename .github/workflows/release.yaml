@@ -1,4 +1,5 @@
 ---
+name: Go Releaser
 on:
   push:
     tags:
