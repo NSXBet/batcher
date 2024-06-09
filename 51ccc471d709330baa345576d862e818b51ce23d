@@ -1,0 +1,1 @@
+{"go-coverage-action-fmt":1,"coverage_pct":93.33333333333333,"pkg_stats":{"github.com/NSXBet/batcher":[0],"github.com/NSXBet/batcher/internal/test":[100],"github.com/NSXBet/batcher/pkg/batcher":[94.33962264150944]},"skipped_count":0}
