@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1717905272592,
+  "lastUpdate": 1717905367618,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -162,6 +162,60 @@ window.BENCHMARK_DATA = {
             "value": 621.1,
             "unit": "ns/op",
             "extra": "1788913 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "heynemann@gmail.com",
+            "name": "Bernardo Heynemann",
+            "username": "heynemann"
+          },
+          "committer": {
+            "email": "heynemann@gmail.com",
+            "name": "Bernardo Heynemann",
+            "username": "heynemann"
+          },
+          "distinct": true,
+          "id": "55201829ebe07525bdf61a3cfa03cf6896feadb7",
+          "message": "fix: goreleaser workflow name",
+          "timestamp": "2024-06-09T00:55:14-03:00",
+          "tree_id": "49db1073098423b3973df5738f7bb3b921cb18bb",
+          "url": "https://github.com/NSXBet/batcher/commit/55201829ebe07525bdf61a3cfa03cf6896feadb7"
+        },
+        "date": 1717905366724,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 615.2,
+            "unit": "ns/op",
+            "extra": "1981100 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 611,
+            "unit": "ns/op",
+            "extra": "1964575 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 650,
+            "unit": "ns/op",
+            "extra": "1878147 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 619.6,
+            "unit": "ns/op",
+            "extra": "1997970 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 605.7,
+            "unit": "ns/op",
+            "extra": "1842004 times\n4 procs"
           }
         ]
       }
