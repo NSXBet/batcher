@@ -4,6 +4,7 @@ all: clean test coverage lint
 
 clean:
 	@rm -rf ./build
+	@rm -rf ./dist
 
 ensure-build:
 	@mkdir -p ./build
@@ -33,7 +34,7 @@ coverage-report:
 	@go tool cover -func=coverage-filtered.out
 
 coverage-report-ci: coverage-run
-	@cat coverage.out | grep -v "test/" > coverage.txt
+	@cat coverage.out | grep -v "test/" | grep -v "main.go" > coverage.txt
 
 lint:
 	@docker run \
@@ -50,3 +51,7 @@ lint:
 	else \
 		echo "🏆 Linting successful!"; \
 	fi
+
+release:
+	@echo "Testing the release process..."
+	@goreleaser release --snapshot --clean
