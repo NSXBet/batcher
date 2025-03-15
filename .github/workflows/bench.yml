@@ -17,7 +17,7 @@ jobs:
       - name: Run benchmark
         run: make ensure-build && make bench-run | tee build/output.txt
       - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: nsx-actions/benchmark-action_github-action-benchmark@v1
         with:
           name: Go Benchmark
           tool: 'go'

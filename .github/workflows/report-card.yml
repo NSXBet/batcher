@@ -12,4 +12,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Go Report Card
-        uses: creekorful/goreportcard-action@v1.0
+        uses: nsx-actions/creekorful_goreportcard-action@v1.0
