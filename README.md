@@ -17,7 +17,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/NSXBet/batcher"
+    "github.com/NSXBet/batcher/pkg/batcher"
 )
 
 type BatchItem struct {
