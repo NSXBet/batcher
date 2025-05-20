@@ -34,3 +34,10 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 		b.config.BatchInterval = batchInterval
 	}
 }
+
+// WithSkipAutoStart skips the automatic start of the batcher.
+func WithSkipAutoStart[T any]() Option[T] {
+	return func(b *Batcher[T]) {
+		b.config.SkipAutoStart = true
+	}
+}
