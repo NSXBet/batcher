@@ -205,6 +205,102 @@ fmt.Printf("batcher has %d items\n", batcher.Len())
 - `WithBatchInterval[*BatchItem](interval time.Duration)`: sets the batch interval.
 - `WithProcessor(func(items []*BatchItem) error)`: sets the processor function.
 
+## FX Integration
+
+The batcher can be easily integrated with [uber-go/fx](https://github.com/uber-go/fx) for dependency injection and lifecycle management. Here's how to use it:
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+
+    "go.uber.org/fx"
+    "go.uber.org/zap"
+    "github.com/NSXBet/batcher/pkg/batcher"
+)
+
+type BatchItem struct {
+    ID   int
+    Name string
+}
+
+// RequestHandler handles incoming requests and enqueues them to the batcher
+type RequestHandler struct {
+    batcher *batcher.Batcher[*BatchItem]
+}
+
+// NewRequestHandler creates a new request handler with batcher dependency
+func NewRequestHandler(b *batcher.Batcher[*BatchItem]) *RequestHandler {
+    return &RequestHandler{
+        batcher: b,
+    }
+}
+
+// HandleRequest processes a single request by enqueueing it to the batcher
+func (h *RequestHandler) HandleRequest(id int, name string) error {
+    h.batcher.Add(&BatchItem{
+        ID:   id,
+        Name: name,
+    })
+    return nil
+}
+
+// Processor handles the actual batch processing
+type Processor struct {
+    logger *zap.Logger
+}
+
+// NewProcessor creates a new processor with its dependencies
+func NewProcessor(logger *zap.Logger) *Processor {
+    return &Processor{
+        logger: logger,
+    }
+}
+
+// Process implements the batch processing logic
+func (p *Processor) Process(items []*BatchItem) error {
+    p.logger.Info("processing items", zap.Int("count", len(items)))
+    return nil
+}
+
+func main() {
+    app := fx.New(
+        // Provide the processor
+        fx.Provide(NewProcessor),
+        // Add the batcher module with a processor function that resolves dependencies
+        batcher.ProvideBatcherInFX[*BatchItem](
+            // This function is an FX resolver that will be called with the processor dependency
+            func(processor *Processor) batcher.Processor[*BatchItem] {
+                // Return the processor's Process method as the batch processor
+                return processor.Process
+            },
+            2,                    // batch size
+            time.Millisecond*100, // batch interval
+        ),
+        // Provide the request handler
+        fx.Provide(NewRequestHandler),
+    )
+
+    // Start the app
+    app.Run()
+}
+```
+
+The key part of the FX integration is the processor function passed to `ProvideBatcherInFX`. This function is an FX resolver that:
+
+1. Takes any dependencies you need (like the `Processor` struct) as parameters
+2. Returns a `batcher.Processor[T]` function that will be used to process batches
+3. Can use any of the injected dependencies to implement the processing logic
+
+This allows you to:
+- Have access to all your dependencies in the processor function
+- Keep your processor logic in a separate struct with its own dependencies
+- Let FX handle the dependency injection and lifecycle management
+
+The batcher will be automatically started when the FX app starts and stopped when the app stops.
+
 ## Tests
 
 Just run `make unit` to run all tests.

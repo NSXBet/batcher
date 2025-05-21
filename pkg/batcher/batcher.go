@@ -19,6 +19,7 @@ func NoOpProcessor[T any]([]T) error {
 }
 
 type Config[T any] struct {
+	SkipAutoStart bool
 	BatchSize     int
 	BatchInterval time.Duration
 	Concurrency   int
@@ -61,9 +62,15 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	batchOutput := rill.Batch(b.batchInputChan.Out(), b.config.BatchSize, b.config.BatchInterval)
 	b.batchesChan = batchOutput
 
-	go b.startProcessing()
+	if !b.config.SkipAutoStart {
+		b.Start()
+	}
 
 	return b
+}
+
+func (b *Batcher[T]) Start() {
+	go b.startProcessing()
 }
 
 func (b *Batcher[T]) Config() *Config[T] {
