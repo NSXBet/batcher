@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1742937002469,
+  "lastUpdate": 1747789906018,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -270,6 +270,60 @@ window.BENCHMARK_DATA = {
             "value": 608.9,
             "unit": "ns/op",
             "extra": "1961792 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "heynemann@gmail.com",
+            "name": "Bernardo Heynemann",
+            "username": "heynemann"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0db52a8299b77ca33bf4fc2cb05fbe2a5bf1f3ed",
+          "message": "feat: fx support (#10)\n\nCurrently batcher and its lifecycle have to be manually injected by its\nusers. This commit adds Uber's FX support to batcher.",
+          "timestamp": "2025-05-21T02:10:47+01:00",
+          "tree_id": "e87d1bae270701ba903103c98a1635603819974a",
+          "url": "https://github.com/NSXBet/batcher/commit/0db52a8299b77ca33bf4fc2cb05fbe2a5bf1f3ed"
+        },
+        "date": 1747789905500,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 554.2,
+            "unit": "ns/op",
+            "extra": "1971862 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 600.2,
+            "unit": "ns/op",
+            "extra": "1960838 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 601.8,
+            "unit": "ns/op",
+            "extra": "1960218 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 603.8,
+            "unit": "ns/op",
+            "extra": "1996831 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 607.5,
+            "unit": "ns/op",
+            "extra": "1897414 times\n4 procs"
           }
         ]
       }
