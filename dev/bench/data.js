@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1747789906018,
+  "lastUpdate": 1747789995138,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -324,6 +324,60 @@ window.BENCHMARK_DATA = {
             "value": 607.5,
             "unit": "ns/op",
             "extra": "1897414 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "8618687+gtkatakura@users.noreply.github.com",
+            "name": "gtkatakura",
+            "username": "gtkatakura"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "01b20eb57dd5d07e8c704e3191cde340604bd671",
+          "message": "Update GitHub Actions to use nsx-actions (#8)",
+          "timestamp": "2025-05-21T02:12:25+01:00",
+          "tree_id": "5cf966a6ffc5aeebd56b6a80a5ee92e36a44b339",
+          "url": "https://github.com/NSXBet/batcher/commit/01b20eb57dd5d07e8c704e3191cde340604bd671"
+        },
+        "date": 1747789994691,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 553.9,
+            "unit": "ns/op",
+            "extra": "2098497 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 594.6,
+            "unit": "ns/op",
+            "extra": "1976506 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 602.7,
+            "unit": "ns/op",
+            "extra": "1981257 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 602.8,
+            "unit": "ns/op",
+            "extra": "1989700 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 607.4,
+            "unit": "ns/op",
+            "extra": "2047582 times\n4 procs"
           }
         ]
       }
