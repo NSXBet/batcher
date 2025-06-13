@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1747789995138,
+  "lastUpdate": 1749780187539,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -378,6 +378,60 @@ window.BENCHMARK_DATA = {
             "value": 607.4,
             "unit": "ns/op",
             "extra": "2047582 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "heynemann@gmail.com",
+            "name": "Bernardo Heynemann",
+            "username": "heynemann"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc8dff7253df185d9202af5dd7c5036e3a5ad253",
+          "message": "feat: close stale prs (#14)",
+          "timestamp": "2025-06-12T23:02:09-03:00",
+          "tree_id": "529cde42905e64a5179f4b1bcd0a1e7ab31157ab",
+          "url": "https://github.com/NSXBet/batcher/commit/dc8dff7253df185d9202af5dd7c5036e3a5ad253"
+        },
+        "date": 1749780186940,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 579.1,
+            "unit": "ns/op",
+            "extra": "2203863 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 610,
+            "unit": "ns/op",
+            "extra": "1999152 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 581.6,
+            "unit": "ns/op",
+            "extra": "1972941 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 599.2,
+            "unit": "ns/op",
+            "extra": "2137395 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 611.1,
+            "unit": "ns/op",
+            "extra": "1985623 times\n4 procs"
           }
         ]
       }
