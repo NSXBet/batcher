@@ -11,4 +11,7 @@ const (
 
 	// DefaultConcurrency is the default concurrency.
 	DefaultConcurrency = 3
+
+	// DefaultBatchSizeBytes is the default batch size in bytes.
+	DefaultBatchSizeBytes = 10 * 1024 * 1024 // 10MB
 )
