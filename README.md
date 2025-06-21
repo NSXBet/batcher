@@ -1,6 +1,6 @@
 # batcher
 
-![CI](https://github.com/NSXBet/batcher/actions/workflows/go.yml/badge.svg)
+[![CI](https://github.com/NSXBet/batcher/actions/workflows/go.yml/badge.svg)](https://github.com/nsxbet/batcher)
 ![CI](https://github.com/NSXBet/batcher/actions/workflows/codeql.yaml/badge.svg)
 [![Go Report Card](https://goreportcard.com/badge/github.com/NSXBet/batcher)](https://goreportcard.com/report/github.com/NSXBet/batcher)
 [![Maintainability](https://api.codeclimate.com/v1/badges/868870a2b4f7f29512ad/maintainability)](https://codeclimate.com/github/NSXBet/batcher/maintainability)
