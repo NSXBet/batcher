@@ -41,3 +41,14 @@ func WithSkipAutoStart[T any]() Option[T] {
 		b.config.SkipAutoStart = true
 	}
 }
+
+// WithBatchSizeBytes sets the batch size in bytes.
+func WithBatchSizeBytes[T any](batchSizeBytes int64) Option[T] {
+	return func(b *Batcher[T]) {
+		if batchSizeBytes <= 0 {
+			batchSizeBytes = DefaultBatchSizeBytes
+		}
+
+		b.config.BatchSizeBytes = batchSizeBytes
+	}
+}

@@ -30,6 +30,7 @@ func main() {
     batcher := batcher.New[*BatchItem](
         batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
         batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
+        batcher.WithBatchSizeBytes[*BatchItem](1024*1024),      // or when batch reaches 1MB in size.
         // then run this processor with each batch
         batcher.WithProcessor(func(items []*BatchItem) error {  
             fmt.Printf("processing batch with %d items...\n", len(items))
@@ -81,6 +82,7 @@ To create a batcher you can use the `New` function:
 batcher := batcher.New[*BatchItem](
     batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
     batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
+    batcher.WithBatchSizeBytes[*BatchItem](1024*1024),      // or when batch reaches 1MB in size.
     // then run this processor with each batch
     batcher.WithProcessor(func(items []*BatchItem) error {  
         fmt.Printf("processing batch with %d items...\n", len(items))
@@ -158,6 +160,25 @@ for i := 0; i < 1000; i++ {
 }
 ```
 
+### Batch Size Control
+
+The batcher supports multiple ways to control when batches are flushed:
+
+1. **By item count**: Using `WithBatchSize()` - flushes when the batch reaches a certain number of items
+2. **By time interval**: Using `WithBatchInterval()` - flushes batches at regular intervals
+3. **By memory size**: Using `WithBatchSizeBytes()` - flushes when the batch reaches a certain size in bytes
+
+```go
+batcher := batcher.New[*BatchItem](
+    batcher.WithBatchSize[*BatchItem](100),                 // Flush every 100 items
+    batcher.WithBatchInterval[*BatchItem](5*time.Second),   // Flush every 5 seconds
+    batcher.WithBatchSizeBytes[*BatchItem](1024*1024),      // Flush when batch reaches 1MB
+    batcher.WithProcessor(processor.Process),
+)
+```
+
+The batcher will flush whenever **any** of these conditions is met first. This gives you fine-grained control over memory usage and processing latency.
+
 ### Waiting for all batches to process
 
 To wait for all batches to process you can use the `Join` function:
@@ -201,9 +222,11 @@ fmt.Printf("batcher has %d items\n", batcher.Len())
 
 ## Available Options to configure batcher
 
-- `WithBatchSize[*BatchItem](size int)`: sets the batch size.
-- `WithBatchInterval[*BatchItem](interval time.Duration)`: sets the batch interval.
-- `WithProcessor(func(items []*BatchItem) error)`: sets the processor function.
+- `WithBatchSize[*BatchItem](size int)`: sets the maximum number of items per batch.
+- `WithBatchInterval[*BatchItem](interval time.Duration)`: sets the maximum time to wait before flushing a batch.
+- `WithBatchSizeBytes[*BatchItem](sizeBytes int64)`: sets the maximum memory size per batch in bytes. The batcher estimates item sizes using reflection.
+- `WithProcessor(func(items []*BatchItem) error)`: sets the processor function to handle each batch.
+- `WithSkipAutoStart[*BatchItem]()`: prevents the batcher from automatically starting processing. Use `Start()` method to begin processing manually.
 
 ## FX Integration
 
