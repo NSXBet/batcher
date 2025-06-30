@@ -20,11 +20,11 @@ jobs:
         uses: nsx-actions/benchmark-action_github-action-benchmark@v1
         with:
           name: Go Benchmark
-          tool: 'go'
+          tool: "go"
           output-file-path: build/output.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
-          alert-threshold: '200%'
+          alert-threshold: "200%"
           comment-on-alert: true
           fail-on-alert: true
-          alert-comment-cc-users: '@heynemann'
+          alert-comment-cc-users: "@heynemann"

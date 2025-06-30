@@ -3,7 +3,7 @@ name: Go Releaser
 on:
   push:
     tags:
-      - '*'
+      - "*"
 permissions:
   contents: write
 jobs:
@@ -20,7 +20,7 @@ jobs:
         uses: nsx-actions/goreleaser_goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: '~> v2'
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -31,7 +31,7 @@ func main() {
         batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
         batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
         // then run this processor with each batch
-        batcher.WithProcessor(func(items []*BatchItem) error {  
+        batcher.WithProcessor(func(items []*BatchItem) error {
             fmt.Printf("processing batch with %d items...\n", len(items))
 
             // do your thing :)
@@ -82,7 +82,7 @@ batcher := batcher.New[*BatchItem](
     batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
     batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
     // then run this processor with each batch
-    batcher.WithProcessor(func(items []*BatchItem) error {  
+    batcher.WithProcessor(func(items []*BatchItem) error {
         fmt.Printf("processing batch with %d items...\n", len(items))
 
         // do your thing :)
@@ -98,7 +98,7 @@ You can pass a processor in the form of a function of signature `func(items []*B
 
 ```go
 batcher := batcher.New[*BatchItem](
-    batcher.WithProcessor(func(items []*BatchItem) error {  
+    batcher.WithProcessor(func(items []*BatchItem) error {
         return nil
     }),
 )
@@ -295,6 +295,7 @@ The key part of the FX integration is the processor function passed to `ProvideB
 3. Can use any of the injected dependencies to implement the processing logic
 
 This allows you to:
+
 - Have access to all your dependencies in the processor function
 - Keep your processor logic in a separate struct with its own dependencies
 - Let FX handle the dependency injection and lifecycle management
