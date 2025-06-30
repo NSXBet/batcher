@@ -51,7 +51,7 @@ jobs:
       - name: Set up Node.js (for coverage)
         uses: actions/setup-node@master
         with:
-          node-version: '12'
+          node-version: "12"
       - name: setup tsc
         run: npm install -g typescript
       - name: Gather dependencies
@@ -102,7 +102,7 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: 'Checkout Repository'
+      - name: "Checkout Repository"
         uses: actions/checkout@v3
       - uses: actions/setup-go@v3
         with:
