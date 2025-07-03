@@ -1,0 +1,24 @@
+2025-07-03T05:54:16.185Z	INFO	test/helpers.go:30	processing items	{"count": 1000}
+2025-07-03T05:54:17.750Z	INFO	test/helpers.go:30	processing items	{"count": 1000}
+2025-07-03T05:54:19.330Z	INFO	test/helpers.go:30	processing items	{"count": 1000}
+goos: linux
+goarch: amd64
+pkg: github.com/NSXBet/batcher/pkg/batcher
+cpu: Intel(R) Xeon(R) Platinum 8488C
+BenchmarkBatcherBatchSize10-8        	 1983736	       548.2 ns/op	     197 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize10-8        	 2018780	       574.9 ns/op	     200 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize10-8        	 2170621	       601.4 ns/op	     193 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize100-8       	 1961361	       678.5 ns/op	     201 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize100-8       	 2101456	       630.5 ns/op	     193 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize100-8       	 2087676	       600.4 ns/op	     195 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize1_000-8     	 2122534	       593.7 ns/op	     192 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize1_000-8     	 2054089	       572.8 ns/op	     204 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize1_000-8     	 2110087	       575.5 ns/op	     200 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize10_000-8    	 2135553	       606.6 ns/op	     197 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize10_000-8    	 1818915	       684.9 ns/op	     198 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize10_000-8    	 2045397	       610.5 ns/op	     204 B/op	       2 allocs/op
+BenchmarkBatcherBatchSize100_000-8   	 1789273	       631.0 ns/op	     205 B/op	       1 allocs/op
+BenchmarkBatcherBatchSize100_000-8   	 2097745	       597.5 ns/op	     195 B/op	       1 allocs/op
+BenchmarkBatcherBatchSize100_000-8   	 1992912	       580.3 ns/op	     205 B/op	       1 allocs/op
+PASS
+ok  	github.com/NSXBet/batcher/pkg/batcher	84.128s
