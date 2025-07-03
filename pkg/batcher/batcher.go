@@ -36,9 +36,6 @@ type Batcher[T any] struct {
 	errorsChan     *chann.Chann[error]
 	batchInputChan *chann.Chann[rill.Try[T]]
 	batchesChan    <-chan rill.Try[[]T]
-	
-	// Object pool for reducing allocations
-	tryPool sync.Pool
 }
 
 // New creates a new Batcher with the given options.
@@ -54,11 +51,6 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 		itemCount:      NewAtomicCounter(),
 		doneChan:       make(chan struct{}),
 		batchInputChan: chann.New[rill.Try[T]](chann.Cap(-1)),
-		tryPool: sync.Pool{
-			New: func() interface{} {
-				return &rill.Try[T]{}
-			},
-		},
 	}
 
 	for _, option := range options {
@@ -86,17 +78,8 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
-	tryObj := b.tryPool.Get().(*rill.Try[T])
-	tryObj.Value = item
-	tryObj.Error = nil
-	
-	b.batchInputChan.In() <- *tryObj
+	b.batchInputChan.In() <- rill.Try[T]{Value: item}
 	b.itemCount.Add(1)
-	
-	// Reset and return to pool
-	var zero T
-	tryObj.Value = zero
-	b.tryPool.Put(tryObj)
 }
 
 func (b *Batcher[T]) Len() int {
@@ -104,21 +87,15 @@ func (b *Batcher[T]) Len() int {
 }
 
 func (b *Batcher[T]) Join(timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	
 	for {
-		if b.Len() == 0 {
-			return nil
-		}
-		
 		select {
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return ErrTimeout
+		case <-time.After(timeout):
+			return ErrTimeout
+		default:
+			if b.Len() == 0 {
+				return nil
 			}
+			time.Sleep(1 * time.Millisecond)
 		}
 	}
 }
@@ -134,6 +111,7 @@ func (b *Batcher[T]) startProcessing() {
 		case batch := <-b.batchesChan:
 			if batch.Error != nil {
 				b.errorsChan.In() <- batch.Error
+
 				continue
 			}
 
