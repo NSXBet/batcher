@@ -307,13 +307,17 @@ func TestMaxQueueSizeDefaultIsUnbounded(t *testing.T) {
 }
 
 func TestMaxQueueSizeAddUnblocksOnClose(t *testing.T) {
-	// ARRANGE — processor blocks forever, queue fills up, Add blocks
+	// ARRANGE — processor blocks until cleanup, queue fills up, Add blocks
+	processorDone := make(chan struct{})
+	t.Cleanup(func() { close(processorDone) })
+
 	b := batcher.New(
 		batcher.WithBatchSize[test.BatchItem](2),
 		batcher.WithBatchInterval[test.BatchItem](10*time.Second),
 		batcher.WithMaxQueueSize[test.BatchItem](4),
 		batcher.WithProcessor(func(_ []test.BatchItem) error {
-			select {} // block forever — simulates hung processor
+			<-processorDone
+			return nil
 		}),
 	)
 
@@ -342,7 +346,6 @@ func TestMaxQueueSizeAddUnblocksOnClose(t *testing.T) {
 	// ASSERT — Add must return promptly after Close
 	select {
 	case <-addReturned:
-		// Good — Add unblocked on shutdown
 	case <-time.After(1 * time.Second):
 		t.Fatal("Add still blocked after Close — deadlock")
 	}
