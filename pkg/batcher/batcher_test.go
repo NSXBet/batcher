@@ -351,14 +351,13 @@ func TestMaxQueueSizeAddUnblocksOnClose(t *testing.T) {
 	}
 }
 
-func TestMaxQueueSizeZeroIsIgnored(t *testing.T) {
-	// ARRANGE
+func TestMaxQueueSizeZeroResetsToUnbounded(t *testing.T) {
 	b := batcher.New(
+		batcher.WithMaxQueueSize[test.BatchItem](100),
 		batcher.WithMaxQueueSize[test.BatchItem](0),
 	)
 	defer b.Close()
 
-	// ASSERT — config should remain 0 (unbounded)
 	require.Equal(t, 0, b.Config().MaxQueueSize)
 }
 

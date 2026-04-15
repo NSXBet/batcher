@@ -44,9 +44,11 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 // A value of 0 (the default) means the queue is unbounded.
 func WithMaxQueueSize[T any](size int) Option[T] {
 	return func(b *Batcher[T]) {
-		if size > 0 {
-			b.config.MaxQueueSize = size
+		if size < 0 {
+			size = 0
 		}
+
+		b.config.MaxQueueSize = size
 	}
 }
 
