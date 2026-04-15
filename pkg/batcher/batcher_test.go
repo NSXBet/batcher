@@ -233,43 +233,52 @@ func TestFlushOnClose(t *testing.T) {
 }
 
 func TestMaxQueueSizeBlocksWhenFull(t *testing.T) {
-	// ARRANGE — slow processor to keep the queue full
+	// ARRANGE — processor blocks until we release it, keeping the queue full
+	processorGate := make(chan struct{})
+
 	b := batcher.New(
 		batcher.WithBatchSize[test.BatchItem](2),
 		batcher.WithBatchInterval[test.BatchItem](10*time.Second),
 		batcher.WithMaxQueueSize[test.BatchItem](4),
 		batcher.WithProcessor(func(_ []test.BatchItem) error {
-			time.Sleep(50 * time.Millisecond) // slow processor
+			<-processorGate // block until test releases
 			return nil
 		}),
 	)
 	defer b.Close()
 
-	// ACT — fill the queue (4 items = queue cap)
+	// ACT — fill the queue to capacity
 	for i := 0; i < 4; i++ {
 		b.Add(test.BatchItem{Key: fmt.Sprintf("key_%d", i)})
 	}
 
-	// The 5th Add should block because the queue is full.
-	// Use a goroutine with a timeout to verify it blocks.
-	done := make(chan struct{})
+	// The 5th Add must block because the queue is full and the processor is
+	// held. We verify by checking it has NOT completed after 100ms.
+	addCompleted := make(chan struct{})
 	go func() {
 		b.Add(test.BatchItem{Key: "blocked"})
-		close(done)
+		close(addCompleted)
 	}()
 
 	select {
-	case <-done:
-		// If Add returns immediately, the queue didn't block — that's wrong
-		// unless the processor already drained items. Give a small window.
-		// If it returns within 5ms, the queue likely isn't blocking.
-		t.Log("Add returned quickly — processor may have drained the queue, which is acceptable")
-	case <-time.After(20 * time.Millisecond):
-		// Add blocked for 20ms — the queue is applying backpressure. Good.
+	case <-addCompleted:
+		t.Fatal("Add returned immediately — expected it to block on a full queue")
+	case <-time.After(100 * time.Millisecond):
+		// Good — Add is blocked.
 	}
 
-	// ASSERT — eventually all items are processed
-	require.NoError(t, b.Join(500*time.Millisecond))
+	// Release the processor so it drains items and unblocks Add.
+	close(processorGate)
+
+	select {
+	case <-addCompleted:
+		// Good — Add completed after processor drained the queue.
+	case <-time.After(1 * time.Second):
+		t.Fatal("Add still blocked after processor was released")
+	}
+
+	// ASSERT — all items are eventually processed
+	require.NoError(t, b.Join(1*time.Second))
 	require.Equal(t, 0, b.Len())
 }
 

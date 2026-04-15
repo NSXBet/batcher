@@ -37,6 +37,7 @@ type Batcher[T any] struct {
 	errorsChan     *chann.Chann[error]
 	batchInputChan *chann.Chann[rill.Try[T]]
 	batchesChan    <-chan rill.Try[[]T]
+	queueSemaphore chan struct{} // nil when unbounded
 }
 
 // New creates a new Batcher with the given options.
@@ -57,12 +58,11 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 		option(b)
 	}
 
-	queueCap := chann.Cap(-1) // unbounded by default
-	if b.config.MaxQueueSize > 0 {
-		queueCap = chann.Cap(b.config.MaxQueueSize)
-	}
+	b.batchInputChan = chann.New[rill.Try[T]](chann.Cap(-1))
 
-	b.batchInputChan = chann.New[rill.Try[T]](queueCap)
+	if b.config.MaxQueueSize > 0 {
+		b.queueSemaphore = make(chan struct{}, b.config.MaxQueueSize)
+	}
 	b.errorsChan = chann.New[error](chann.Cap(-1))
 
 	batchOutput := rill.Batch(b.batchInputChan.Out(), b.config.BatchSize, b.config.BatchInterval)
@@ -84,6 +84,10 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
+	if b.queueSemaphore != nil {
+		b.queueSemaphore <- struct{}{} // blocks when queue is full
+	}
+
 	b.batchInputChan.In() <- rill.Try[T]{Value: item}
 	b.itemCount.Add(1)
 }
@@ -126,6 +130,12 @@ func (b *Batcher[T]) startProcessing() {
 			}
 
 			b.itemCount.Add(int64(-len(batch.Value)))
+
+			if b.queueSemaphore != nil {
+				for range len(batch.Value) {
+					<-b.queueSemaphore
+				}
+			}
 		}
 	}
 }
