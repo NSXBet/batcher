@@ -35,6 +35,21 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 	}
 }
 
+// WithMaxQueueSize sets the maximum number of items that can be queued for
+// batching. When the queue is full, Add blocks until space is available. This
+// provides natural backpressure to callers — for example, a Kafka consumer's
+// Handle() will block, preventing the consumer from reading ahead of what the
+// processor can handle.
+//
+// A value of 0 (the default) means the queue is unbounded.
+func WithMaxQueueSize[T any](size int) Option[T] {
+	return func(b *Batcher[T]) {
+		if size > 0 {
+			b.config.MaxQueueSize = size
+		}
+	}
+}
+
 // WithSkipAutoStart skips the automatic start of the batcher.
 func WithSkipAutoStart[T any]() Option[T] {
 	return func(b *Batcher[T]) {

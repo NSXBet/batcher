@@ -23,6 +23,7 @@ type Config[T any] struct {
 	BatchSize     int
 	BatchInterval time.Duration
 	Concurrency   int
+	MaxQueueSize  int
 	ProcessorFunc Processor[T]
 }
 
@@ -48,15 +49,20 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 			ProcessorFunc: NoOpProcessor[T],
 		},
 
-		itemCount:      NewAtomicCounter(),
-		doneChan:       make(chan struct{}),
-		batchInputChan: chann.New[rill.Try[T]](chann.Cap(-1)),
+		itemCount: NewAtomicCounter(),
+		doneChan:  make(chan struct{}),
 	}
 
 	for _, option := range options {
 		option(b)
 	}
 
+	queueCap := chann.Cap(-1) // unbounded by default
+	if b.config.MaxQueueSize > 0 {
+		queueCap = chann.Cap(b.config.MaxQueueSize)
+	}
+
+	b.batchInputChan = chann.New[rill.Try[T]](queueCap)
 	b.errorsChan = chann.New[error](chann.Cap(-1))
 
 	batchOutput := rill.Batch(b.batchInputChan.Out(), b.config.BatchSize, b.config.BatchInterval)
