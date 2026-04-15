@@ -34,10 +34,11 @@ type Batcher[T any] struct {
 	closeOnce      sync.Once
 	itemCount      *AtomicCounter
 	doneChan       chan struct{}
+	closingChan    chan struct{} // closed at start of Close(); unblocks Add()
 	errorsChan     *chann.Chann[error]
 	batchInputChan *chann.Chann[rill.Try[T]]
 	batchesChan    <-chan rill.Try[[]T]
-	queueSemaphore chan struct{} // nil when unbounded
+	queueSemaphore chan struct{}
 }
 
 // New creates a new Batcher with the given options.
@@ -50,8 +51,9 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 			ProcessorFunc: NoOpProcessor[T],
 		},
 
-		itemCount: NewAtomicCounter(),
-		doneChan:  make(chan struct{}),
+		itemCount:   NewAtomicCounter(),
+		doneChan:    make(chan struct{}),
+		closingChan: make(chan struct{}),
 	}
 
 	for _, option := range options {
@@ -85,7 +87,11 @@ func (b *Batcher[T]) Config() *Config[T] {
 
 func (b *Batcher[T]) Add(item T) {
 	if b.queueSemaphore != nil {
-		b.queueSemaphore <- struct{}{} // blocks when queue is full
+		select {
+		case b.queueSemaphore <- struct{}{}:
+		case <-b.closingChan:
+			return
+		}
 	}
 
 	b.batchInputChan.In() <- rill.Try[T]{Value: item}
@@ -148,6 +154,8 @@ func (b *Batcher[T]) Close() error {
 	var clErr error
 
 	b.closeOnce.Do(func() {
+		close(b.closingChan) // unblock any waiting Add() callers immediately
+
 		timeout := time.Duration(2*2*math.Ceil(float64(b.Len())/float64(b.config.BatchSize))) *
 			b.config.BatchInterval
 		clErr = b.Join(timeout)

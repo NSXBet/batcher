@@ -306,6 +306,48 @@ func TestMaxQueueSizeDefaultIsUnbounded(t *testing.T) {
 	require.EqualValues(t, 10000, processed.Load())
 }
 
+func TestMaxQueueSizeAddUnblocksOnClose(t *testing.T) {
+	// ARRANGE — processor blocks forever, queue fills up, Add blocks
+	b := batcher.New(
+		batcher.WithBatchSize[test.BatchItem](2),
+		batcher.WithBatchInterval[test.BatchItem](10*time.Second),
+		batcher.WithMaxQueueSize[test.BatchItem](4),
+		batcher.WithProcessor(func(_ []test.BatchItem) error {
+			select {} // block forever — simulates hung processor
+		}),
+	)
+
+	// Fill the queue
+	for i := 0; i < 4; i++ {
+		b.Add(test.BatchItem{Key: fmt.Sprintf("key_%d", i)})
+	}
+
+	// Add blocks because queue is full and processor never releases
+	addReturned := make(chan struct{})
+	go func() {
+		b.Add(test.BatchItem{Key: "blocked"})
+		close(addReturned)
+	}()
+
+	// Verify it's actually blocked
+	select {
+	case <-addReturned:
+		t.Fatal("Add returned before Close — expected it to block")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	// ACT — Close the batcher, which should unblock the stuck Add
+	go b.Close()
+
+	// ASSERT — Add must return promptly after Close
+	select {
+	case <-addReturned:
+		// Good — Add unblocked on shutdown
+	case <-time.After(1 * time.Second):
+		t.Fatal("Add still blocked after Close — deadlock")
+	}
+}
+
 func TestMaxQueueSizeZeroIsIgnored(t *testing.T) {
 	// ARRANGE
 	b := batcher.New(
