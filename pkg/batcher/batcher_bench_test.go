@@ -1,60 +1,252 @@
 package batcher_test
 
 import (
-	"fmt"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/NSXBet/batcher/internal/test"
 	"github.com/NSXBet/batcher/pkg/batcher"
 )
 
-func BenchmarkBatcherBatchSize10(b *testing.B) {
-	runBench(b, 10)
+type benchItem struct {
+	ID int
 }
 
-func BenchmarkBatcherBatchSize100(b *testing.B) {
-	runBench(b, 100)
+func BenchmarkBatcherEnqueueOnly(b *testing.B) {
+	for _, batchSize := range []int{10, 100, 1000} {
+		b.Run("steady_high_volume_flushes_by_size_batch_"+strconv.Itoa(batchSize), func(b *testing.B) {
+			benchmarkEnqueueOnlySteadyLoad(b, batchSize)
+		})
+	}
 }
 
-func BenchmarkBatcherBatchSize1_000(b *testing.B) {
-	runBench(b, 1000)
+func BenchmarkBatcherEndToEnd(b *testing.B) {
+	for _, batchSize := range []int{10, 100, 1000} {
+		b.Run("steady_high_volume_processes_full_batch_of_"+strconv.Itoa(batchSize), func(b *testing.B) {
+			benchmarkEndToEndSizeFlush(b, batchSize)
+		})
+	}
+
+	b.Run("burst_of_1000_items_drains_in_batches_of_100", func(b *testing.B) {
+		benchmarkBurstDrain(b, 1000, 100)
+	})
+
+	b.Run("sparse_trickle_flushes_single_item_on_interval", func(b *testing.B) {
+		benchmarkEndToEndIntervalFlush(b, 2*time.Millisecond)
+	})
 }
 
-func BenchmarkBatcherBatchSize10_000(b *testing.B) {
-	runBench(b, 100)
+func BenchmarkBatcherShutdown(b *testing.B) {
+	b.Run("service_shutdown_drains_partial_batch_before_exit", func(b *testing.B) {
+		benchmarkShutdownFlush(b, 25, 100, 5*time.Millisecond)
+	})
 }
 
-func BenchmarkBatcherBatchSize100_000(b *testing.B) {
-	runBench(b, 100)
-}
+func benchmarkEnqueueOnlySteadyLoad(b *testing.B, batchSize int) {
+	b.ReportAllocs()
 
-func runBench(b *testing.B, batchSize int) {
-	b.StopTimer()
+	var processed atomic.Int64
 
 	batch := batcher.New(
-		batcher.WithProcessor(func(_ []test.BatchItem) error {
+		batcher.WithProcessor(func(items []benchItem) error {
+			processed.Add(int64(len(items)))
 			return nil
 		}),
-		batcher.WithBatchSize[test.BatchItem](batchSize),
-		batcher.WithBatchInterval[test.BatchItem](1*time.Second),
+		batcher.WithBatchSize[benchItem](batchSize),
+		batcher.WithBatchInterval[benchItem](time.Second),
 	)
+	b.Cleanup(func() {
+		if err := batch.Close(); err != nil {
+			b.Fatalf("close error: %v", err)
+		}
+	})
 
-	defer batch.Close()
-
-	b.StartTimer()
+	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		batch.Add(test.BatchItem{Key: fmt.Sprintf("key_%d", i)})
+		batch.Add(benchItem{ID: i})
 	}
 
 	b.StopTimer()
 
-	if err := batch.Join(5 * time.Second); err != nil {
-		b.Fatalf("error: %v", err)
+	if err := batch.Join(10 * time.Second); err != nil {
+		b.Fatalf("join error: %v", err)
+	}
+
+	if got := processed.Load(); got != int64(b.N) {
+		b.Fatalf("processed %d items, want %d", got, b.N)
+	}
+
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
+}
+
+func benchmarkEndToEndSizeFlush(b *testing.B, batchSize int) {
+	b.ReportAllocs()
+
+	processed := make(chan int, 1)
+
+	batch := batcher.New(
+		batcher.WithProcessor(func(items []benchItem) error {
+			processed <- len(items)
+			return nil
+		}),
+		batcher.WithBatchSize[benchItem](batchSize),
+		batcher.WithBatchInterval[benchItem](time.Second),
+	)
+	b.Cleanup(func() {
+		if err := batch.Close(); err != nil {
+			b.Fatalf("close error: %v", err)
+		}
+	})
+
+	totalItems := 0
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < batchSize; j++ {
+			batch.Add(benchItem{ID: totalItems + j})
+		}
+
+		totalItems += batchSize
+
+		if got := <-processed; got != batchSize {
+			b.Fatalf("processed batch size %d, want %d", got, batchSize)
+		}
+	}
+
+	b.StopTimer()
+
+	if err := batch.Join(10 * time.Second); err != nil {
+		b.Fatalf("join error: %v", err)
 	}
 
 	if batch.Len() > 0 {
 		b.Fatalf("expected 0 items in batch, got %d", batch.Len())
 	}
+
+	b.ReportMetric(float64(totalItems)/b.Elapsed().Seconds(), "items/s")
+}
+
+func benchmarkEndToEndIntervalFlush(b *testing.B, interval time.Duration) {
+	b.ReportAllocs()
+
+	processed := make(chan int, 1)
+
+	batch := batcher.New(
+		batcher.WithProcessor(func(items []benchItem) error {
+			processed <- len(items)
+			return nil
+		}),
+		batcher.WithBatchSize[benchItem](1000),
+		batcher.WithBatchInterval[benchItem](interval),
+	)
+	b.Cleanup(func() {
+		if err := batch.Close(); err != nil {
+			b.Fatalf("close error: %v", err)
+		}
+	})
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		batch.Add(benchItem{ID: i})
+
+		if got := <-processed; got != 1 {
+			b.Fatalf("processed batch size %d, want 1", got)
+		}
+	}
+
+	b.StopTimer()
+
+	if err := batch.Join(10 * time.Second); err != nil {
+		b.Fatalf("join error: %v", err)
+	}
+
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
+}
+
+func benchmarkBurstDrain(b *testing.B, burstSize int, batchSize int) {
+	b.ReportAllocs()
+
+	processed := make(chan int, burstSize/batchSize+1)
+
+	batch := batcher.New(
+		batcher.WithProcessor(func(items []benchItem) error {
+			processed <- len(items)
+			return nil
+		}),
+		batcher.WithBatchSize[benchItem](batchSize),
+		batcher.WithBatchInterval[benchItem](time.Second),
+	)
+	b.Cleanup(func() {
+		if err := batch.Close(); err != nil {
+			b.Fatalf("close error: %v", err)
+		}
+	})
+
+	nextID := 0
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < burstSize; j++ {
+			batch.Add(benchItem{ID: nextID})
+			nextID++
+		}
+
+		drained := 0
+		for drained < burstSize {
+			drained += <-processed
+		}
+	}
+
+	b.StopTimer()
+
+	if err := batch.Join(10 * time.Second); err != nil {
+		b.Fatalf("join error: %v", err)
+	}
+
+	b.ReportMetric(float64(b.N*burstSize)/b.Elapsed().Seconds(), "items/s")
+}
+
+func benchmarkShutdownFlush(b *testing.B, pendingItems int, batchSize int, interval time.Duration) {
+	b.ReportAllocs()
+
+	totalItems := 0
+	b.StopTimer()
+
+	for i := 0; i < b.N; i++ {
+		processed := make(chan int, 1)
+
+		batch := batcher.New(
+			batcher.WithProcessor(func(items []benchItem) error {
+				processed <- len(items)
+				return nil
+			}),
+			batcher.WithBatchSize[benchItem](batchSize),
+			batcher.WithBatchInterval[benchItem](interval),
+		)
+
+		b.StartTimer()
+
+		for j := 0; j < pendingItems; j++ {
+			batch.Add(benchItem{ID: j})
+		}
+
+		if err := batch.Close(); err != nil {
+			b.Fatalf("close error: %v", err)
+		}
+
+		b.StopTimer()
+
+		if got := <-processed; got != pendingItems {
+			b.Fatalf("processed batch size %d, want %d", got, pendingItems)
+		}
+
+		totalItems += pendingItems
+	}
+
+	b.ReportMetric(float64(totalItems)/b.Elapsed().Seconds(), "items/s")
 }
