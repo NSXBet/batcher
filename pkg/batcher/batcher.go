@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/destel/rill"
 	"golang.design/x/chann"
 )
 
@@ -34,8 +33,7 @@ type Batcher[T any] struct {
 	itemCount      *AtomicCounter
 	doneChan       chan struct{}
 	errorsChan     *chann.Chann[error]
-	batchInputChan *chann.Chann[rill.Try[T]]
-	batchesChan    <-chan rill.Try[[]T]
+	batchInputChan *chann.Chann[T]
 }
 
 // New creates a new Batcher with the given options.
@@ -50,7 +48,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 
 		itemCount:      NewAtomicCounter(),
 		doneChan:       make(chan struct{}),
-		batchInputChan: chann.New[rill.Try[T]](chann.Cap(-1)),
+		batchInputChan: chann.New[T](chann.Cap(-1)),
 	}
 
 	for _, option := range options {
@@ -58,9 +56,6 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	}
 
 	b.errorsChan = chann.New[error](chann.Cap(-1))
-
-	batchOutput := rill.Batch(b.batchInputChan.Out(), b.config.BatchSize, b.config.BatchInterval)
-	b.batchesChan = batchOutput
 
 	if !b.config.SkipAutoStart {
 		b.Start()
@@ -78,7 +73,7 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
-	b.batchInputChan.In() <- rill.Try[T]{Value: item}
+	b.batchInputChan.In() <- item
 	b.itemCount.Add(1)
 }
 
@@ -103,41 +98,72 @@ func (b *Batcher[T]) Join(timeout time.Duration) error {
 }
 
 func (b *Batcher[T]) startProcessing() {
-	// Close channels in the correct order to prevent goroutine leaks:
-	// 1. First close the input channel to stop the rill pipeline from producing more batches
-	// 2. Then drain the output channel to allow rill goroutines to exit cleanly
-	// 3. Finally close the errors channel
 	defer b.errorsChan.Close()
-	defer func() {
-		// Drain any remaining batches from the rill pipeline to ensure
-		// all rill goroutines can exit cleanly. This prevents goroutine leaks.
-		for range b.batchesChan {
-			// Just drain, don't process during shutdown
-		}
-	}()
 	defer b.batchInputChan.Close()
+
+	var (
+		batch  []T
+		timer  *time.Timer
+		timerC <-chan time.Time
+	)
+
+	stopTimer := func() {
+		if timer == nil {
+			return
+		}
+
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+
+		timerC = nil
+	}
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		items := batch
+		batch = nil
+		stopTimer()
+
+		if err := b.config.ProcessorFunc(items); err != nil {
+			b.errorsChan.In() <- err
+		}
+
+		b.itemCount.Add(int64(-len(items)))
+	}
 
 	for {
 		select {
 		case <-b.doneChan:
 			return
-		case batch, ok := <-b.batchesChan:
+		case item, ok := <-b.batchInputChan.Out():
 			if !ok {
-				// Channel closed, exit gracefully
 				return
 			}
 
-			if batch.Error != nil {
-				b.errorsChan.In() <- batch.Error
-
-				continue
+			if len(batch) == 0 {
+				batch = make([]T, 0, b.config.BatchSize)
+				if timer == nil {
+					timer = time.NewTimer(b.config.BatchInterval)
+				} else {
+					timer.Reset(b.config.BatchInterval)
+				}
+				timerC = timer.C
 			}
 
-			if err := b.config.ProcessorFunc(batch.Value); err != nil {
-				b.errorsChan.In() <- err
-			}
+			batch = append(batch, item)
 
-			b.itemCount.Add(int64(-len(batch.Value)))
+			if len(batch) == b.config.BatchSize {
+				flush()
+			}
+		case <-timerC:
+			flush()
 		}
 	}
 }
