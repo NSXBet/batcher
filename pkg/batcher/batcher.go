@@ -87,28 +87,46 @@ func (b *Batcher[T]) Len() int {
 }
 
 func (b *Batcher[T]) Join(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+
 	for {
-		select {
-		case <-time.After(timeout):
-			return ErrTimeout
-		default:
-			if b.Len() == 0 {
-				return nil
-			}
-			time.Sleep(1 * time.Millisecond)
+		if b.Len() == 0 {
+			return nil
 		}
+
+		if time.Now().After(deadline) {
+			return ErrTimeout
+		}
+
+		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 func (b *Batcher[T]) startProcessing() {
+	// Close channels in the correct order to prevent goroutine leaks:
+	// 1. First close the input channel to stop the rill pipeline from producing more batches
+	// 2. Then drain the output channel to allow rill goroutines to exit cleanly
+	// 3. Finally close the errors channel
 	defer b.errorsChan.Close()
+	defer func() {
+		// Drain any remaining batches from the rill pipeline to ensure
+		// all rill goroutines can exit cleanly. This prevents goroutine leaks.
+		for range b.batchesChan {
+			// Just drain, don't process during shutdown
+		}
+	}()
 	defer b.batchInputChan.Close()
 
 	for {
 		select {
 		case <-b.doneChan:
 			return
-		case batch := <-b.batchesChan:
+		case batch, ok := <-b.batchesChan:
+			if !ok {
+				// Channel closed, exit gracefully
+				return
+			}
+
 			if batch.Error != nil {
 				b.errorsChan.In() <- batch.Error
 
@@ -132,11 +150,29 @@ func (b *Batcher[T]) Close() error {
 	var clErr error
 
 	b.closeOnce.Do(func() {
+		// Calculate timeout based on pending items, with a maximum of 10 seconds
 		timeout := time.Duration(2*2*math.Ceil(float64(b.Len())/float64(b.config.BatchSize))) *
 			b.config.BatchInterval
+
+		// Cap the timeout at 10 seconds to prevent indefinite blocking
+		maxTimeout := 10 * time.Second
+		if timeout > maxTimeout {
+			timeout = maxTimeout
+		}
+
+		// Ensure a minimum timeout of 100ms
+		if timeout < 100*time.Millisecond {
+			timeout = 100 * time.Millisecond
+		}
+
 		clErr = b.Join(timeout)
 
+		// Signal shutdown to the processing goroutine
 		close(b.doneChan)
+
+		// Give the goroutine a moment to exit cleanly
+		// This allows the deferred cleanup to run
+		time.Sleep(50 * time.Millisecond)
 
 		b.isClosed = true
 	})
