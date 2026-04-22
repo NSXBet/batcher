@@ -3,7 +3,6 @@ module github.com/NSXBet/batcher
 go 1.22.4
 
 require (
-	github.com/destel/rill v0.1.2
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/atomic v1.11.0
 	go.uber.org/fx v1.24.0
