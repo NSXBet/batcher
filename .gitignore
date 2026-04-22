@@ -24,3 +24,6 @@ build
 
 dist/
 dist
+.mcp.json
+.claude-flow
+.swarm
