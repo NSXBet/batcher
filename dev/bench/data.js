@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1751254628171,
+  "lastUpdate": 1776889181110,
   "repoUrl": "https://github.com/NSXBet/batcher",
   "entries": {
     "Go Benchmark": [
@@ -540,6 +540,60 @@ window.BENCHMARK_DATA = {
             "value": 603.9,
             "unit": "ns/op",
             "extra": "2017396 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "67035049+Hanake0@users.noreply.github.com",
+            "name": "Breno Gomes Haese",
+            "username": "Hanake0"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "459f362c529d2933ade081828a14cf535cf8cb66",
+          "message": "fix: resolve goroutine leaks during shutdown (#23)\n\nThis commit fixes critical goroutine leak issues that occurred when Close()\nwas called on an active batcher, particularly during consumer crash recovery\nscenarios or rapid start/stop cycles.\n\nRoot Causes:\n1. Improper channel draining: The startProcessing() goroutine would exit\n   without draining the batchesChan, leaving internal rill pipeline\n   goroutines blocked trying to send remaining batches.\n\n2. Broken timeout in Join(): The timeout logic was creating a new timer\n   on each loop iteration, effectively resetting the timeout continuously,\n   preventing it from ever expiring.\n\n3. Unbounded Close() timeout: The calculated timeout could be very long\n   or even indefinite, causing Close() to block for extended periods.\n\nFixes:\n- startProcessing(): Added proper channel draining in deferred cleanup to\n  ensure all rill pipeline goroutines can exit cleanly. Added channel close\n  detection and ensured correct cleanup order (close input → drain output\n  → close errors).\n\n- Join(): Fixed timeout logic to use a deadline instead of recreating\n  timers, ensuring timeouts actually work as expected.\n\n- Close(): Added maximum timeout of 10 seconds to prevent indefinite\n  blocking, minimum timeout of 100ms for cleanup, and 50ms grace period\n  for deferred cleanup to complete.\n\nTesting:\n- Added comprehensive goroutine leak test suite (8 new tests) covering:\n  * Shutdown with failing processors\n  * Shutdown with pending messages\n  * Shutdown during active processing\n  * Rapid start/stop cycles\n  * Multiple concurrent Close() calls\n  * Timeout behavior verification\n\n- All 26 tests pass (18 existing + 8 new)\n- No race conditions detected with -race flag\n- No performance regression (~430 ns/op maintained)\n- Full backward compatibility maintained\n\nImpact:\nAll goroutines now clean up properly within 2-5 seconds of Close() being\ncalled, regardless of processor state, pending messages, or timing\nconditions. This resolves goroutine leaks observed in production\nintegrations with reliable-redis-queues during crash recovery tests.\n\nCo-authored-by: Bernardo Heynemann <heynemann@gmail.com>",
+          "timestamp": "2026-04-22T17:18:32-03:00",
+          "tree_id": "91b0347b08644ef5290757d6869c140c21e47a0e",
+          "url": "https://github.com/NSXBet/batcher/commit/459f362c529d2933ade081828a14cf535cf8cb66"
+        },
+        "date": 1776889180789,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkBatcherBatchSize10",
+            "value": 665.3,
+            "unit": "ns/op",
+            "extra": "1761782 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100",
+            "value": 688.7,
+            "unit": "ns/op",
+            "extra": "1784460 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize1_000",
+            "value": 639.4,
+            "unit": "ns/op",
+            "extra": "1846587 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize10_000",
+            "value": 633,
+            "unit": "ns/op",
+            "extra": "1845778 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkBatcherBatchSize100_000",
+            "value": 644.3,
+            "unit": "ns/op",
+            "extra": "1796842 times\n4 procs"
           }
         ]
       }
