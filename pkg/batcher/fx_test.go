@@ -71,3 +71,34 @@ func TestProvideBatcherInFX(t *testing.T) {
 	require.True(t, b.IsClosed(), "batcher should be closed after app stop")
 	require.Equal(t, uint32(2), p.counter.Load(), "processor should have processed 2 items")
 }
+
+func TestProvideBatcherInFXStopFlushesPartialBatch(t *testing.T) {
+	var (
+		b *batcher.Batcher[*BatchItem]
+		p *Processor
+	)
+
+	app := fxtest.New(t,
+		fx.Provide(NewProcessor),
+		batcher.ProvideBatcherInFX[*BatchItem](
+			func(processor *Processor) batcher.Processor[*BatchItem] {
+				return processor.Process
+			},
+			10,
+			30*time.Millisecond,
+		),
+		fx.Populate(&b, &p),
+	)
+
+	app.RequireStart()
+	require.NotNil(t, b, "batcher should be populated")
+
+	b.Add(&BatchItem{ID: 1, Name: "item1"})
+	b.Add(&BatchItem{ID: 2, Name: "item2"})
+	b.Add(&BatchItem{ID: 3, Name: "item3"})
+
+	app.RequireStop()
+
+	require.True(t, b.IsClosed(), "batcher should be closed after app stop")
+	require.Equal(t, uint32(3), p.counter.Load(), "processor should have processed 3 items")
+}
