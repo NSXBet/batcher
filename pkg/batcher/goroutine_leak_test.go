@@ -1,6 +1,7 @@
 package batcher_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -131,6 +132,59 @@ func TestBatcher_StopWithPendingMessages(t *testing.T) {
 			currentGoroutines := runtime.NumGoroutine()
 			if currentGoroutines <= startGoroutines+2 {
 				t.Logf("✅ All goroutines cleaned up successfully")
+				return
+			}
+		}
+	}
+}
+
+// TestBatcher_BlockedProducerUnblocksOnClose covers the bounded-queue case where
+// a producer goroutine is waiting for capacity when shutdown begins.
+func TestBatcher_BlockedProducerUnblocksOnClose(t *testing.T) {
+	initialGoroutines := runtime.NumGoroutine()
+
+	b := batcher.New(
+		batcher.WithSkipAutoStart[string](),
+		batcher.WithBatchSize[string](10),
+		batcher.WithBatchInterval[string](10*time.Millisecond),
+		batcher.WithMaxQueueSize[string](1),
+	)
+
+	require.NoError(t, b.Enqueue(context.Background(), "first"))
+
+	producerDone := make(chan struct{})
+	go func() {
+		defer close(producerDone)
+		b.Add("second")
+	}()
+
+	select {
+	case <-producerDone:
+		t.Fatal("producer should have blocked on full bounded queue")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.ErrorIs(t, b.Close(), batcher.ErrTimeout)
+
+	select {
+	case <-producerDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("blocked producer did not unblock after Close")
+	}
+
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			currentGoroutines := runtime.NumGoroutine()
+			t.Fatalf("goroutine cleanup failed: started with %d, still have %d after blocked producer shutdown",
+				initialGoroutines, currentGoroutines)
+		case <-ticker.C:
+			currentGoroutines := runtime.NumGoroutine()
+			if currentGoroutines <= initialGoroutines+2 {
 				return
 			}
 		}

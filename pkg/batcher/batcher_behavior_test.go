@@ -143,6 +143,80 @@ func TestBatchIntervalStartsWhenFirstItemArrives(t *testing.T) {
 	require.NoError(t, b.Join(500*time.Millisecond))
 }
 
+func TestBoundedQueueBlocksUntilConsumerDrainsCapacity(t *testing.T) {
+	processedCh := make(chan []test.BatchItem, 1)
+
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithBatchSize[test.BatchItem](10),
+		batcher.WithBatchInterval[test.BatchItem](20*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](2),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			processedCh <- append([]test.BatchItem(nil), items...)
+			return nil
+		}),
+	)
+	defer b.Close()
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "second"}))
+
+	blockedDone := make(chan error, 1)
+	go func() {
+		blockedDone <- b.Enqueue(context.Background(), test.BatchItem{Key: "third"})
+	}()
+
+	select {
+	case err := <-blockedDone:
+		t.Fatalf("enqueue should have blocked, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.Equal(t, 2, b.Len(), "only accepted items should count toward Len")
+
+	b.Start()
+
+	select {
+	case err := <-blockedDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for blocked enqueue to unblock")
+	}
+
+	select {
+	case batch := <-processedCh:
+		require.Equal(t, []test.BatchItem{
+			{Key: "first"},
+			{Key: "second"},
+			{Key: "third"},
+		}, batch)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for bounded queue flush")
+	}
+
+	require.NoError(t, b.Join(500*time.Millisecond))
+}
+
+func TestEnqueueReturnsDeadlineExceededWhenBoundedQueueIsFull(t *testing.T) {
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithBatchSize[test.BatchItem](10),
+		batcher.WithBatchInterval[test.BatchItem](time.Second),
+		batcher.WithMaxQueueSize[test.BatchItem](1),
+	)
+	defer b.Close()
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	err := b.Enqueue(ctx, test.BatchItem{Key: "second"})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, b.Len())
+}
+
 func TestDoesNotEmitEmptyBatchesWhileIdle(t *testing.T) {
 	callCh := make(chan int, 2)
 
@@ -223,6 +297,67 @@ func TestPreservesOrderingAcrossFullAndPartialBatches(t *testing.T) {
 
 	require.Equal(t, []int{3, 3, 2}, batchSizes)
 	require.Equal(t, expectedKeys, keys)
+}
+
+func TestBoundedQueuePreservesOrderingAcrossBlockedEnqueueAndMultipleFlushes(t *testing.T) {
+	var (
+		mu         sync.Mutex
+		keys       []string
+		batchSizes []int
+	)
+
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithBatchSize[test.BatchItem](2),
+		batcher.WithBatchInterval[test.BatchItem](20*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](2),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			batchSizes = append(batchSizes, len(items))
+			for _, item := range items {
+				keys = append(keys, item.Key)
+			}
+
+			return nil
+		}),
+	)
+	defer b.Close()
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "second"}))
+
+	blockedDone := make(chan error, 1)
+	go func() {
+		blockedDone <- b.Enqueue(context.Background(), test.BatchItem{Key: "third"})
+	}()
+
+	select {
+	case err := <-blockedDone:
+		t.Fatalf("enqueue should have blocked, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	b.Start()
+
+	select {
+	case err := <-blockedDone:
+		require.NoError(t, err)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for blocked enqueue to unblock")
+	}
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "fourth"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "fifth"}))
+
+	require.NoError(t, b.Join(500*time.Millisecond))
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []int{2, 2, 1}, batchSizes)
+	require.Equal(t, []string{"first", "second", "third", "fourth", "fifth"}, keys)
 }
 
 func TestLenReturnsToZeroAfterProcessorErrors(t *testing.T) {
@@ -317,6 +452,41 @@ func TestCloseFlushesPartialBatchAndIsIdempotent(t *testing.T) {
 	require.Equal(t, []string{"first", "second", "third"}, keys)
 }
 
+func TestCloseFlushesPartialBatchWithBoundedInput(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		keys []string
+	)
+
+	b := batcher.New(
+		batcher.WithBatchSize[test.BatchItem](100),
+		batcher.WithBatchInterval[test.BatchItem](50*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](3),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			for _, item := range items {
+				keys = append(keys, item.Key)
+			}
+
+			return nil
+		}),
+	)
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "second"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "third"}))
+
+	require.NoError(t, b.Close())
+	require.Equal(t, 0, b.Len())
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"first", "second", "third"}, keys)
+}
+
 func TestEnqueueReturnsContextErrorWhenAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -341,6 +511,37 @@ func TestEnqueueReturnsClosingErrorAfterClose(t *testing.T) {
 
 	require.ErrorIs(t, err, batcher.ErrClosing)
 	require.Equal(t, 0, b.Len())
+}
+
+func TestEnqueueReturnsClosingErrorWhenCloseStartsWhileWaiting(t *testing.T) {
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithBatchSize[test.BatchItem](10),
+		batcher.WithBatchInterval[test.BatchItem](10*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](1),
+	)
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- b.Enqueue(context.Background(), test.BatchItem{Key: "second"})
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("enqueue should have blocked, returned %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.ErrorIs(t, b.Close(), batcher.ErrTimeout)
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, batcher.ErrClosing)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for blocked enqueue to wake on close")
+	}
 }
 
 func TestAddSilentlyDropsAfterClose(t *testing.T) {
