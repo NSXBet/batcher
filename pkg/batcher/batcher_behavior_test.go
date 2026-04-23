@@ -69,6 +69,46 @@ func TestSkipAutoStartQueuesItemsUntilStart(t *testing.T) {
 	require.NoError(t, b.Close())
 }
 
+func TestSkipAutoStartQueuesItemsUntilStartWithBoundedInput(t *testing.T) {
+	processedCh := make(chan []test.BatchItem, 1)
+
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithBatchSize[test.BatchItem](10),
+		batcher.WithBatchInterval[test.BatchItem](20*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](2),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			batchCopy := append([]test.BatchItem(nil), items...)
+			processedCh <- batchCopy
+
+			return nil
+		}),
+	)
+
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "first"}))
+	require.NoError(t, b.Enqueue(context.Background(), test.BatchItem{Key: "second"}))
+
+	select {
+	case batch := <-processedCh:
+		t.Fatalf("received batch before Start: %+v", batch)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	require.Equal(t, 2, b.Len())
+
+	b.Start()
+
+	select {
+	case batch := <-processedCh:
+		require.Equal(t, []test.BatchItem{{Key: "first"}, {Key: "second"}}, batch)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for queued items to process after Start")
+	}
+
+	require.NoError(t, b.Join(500*time.Millisecond))
+	require.NoError(t, b.Close())
+}
+
 func TestBatchIntervalStartsWhenFirstItemArrives(t *testing.T) {
 	processedCh := make(chan time.Time, 1)
 

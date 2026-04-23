@@ -38,6 +38,7 @@ type Batcher[T any] struct {
 	stopAccepting  chan struct{}
 	doneChan       chan struct{}
 	errorsChan     *chann.Chann[error]
+	boundedInputCh chan T
 	batchInputChan *chann.Chann[T]
 }
 
@@ -52,14 +53,19 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 			ProcessorFunc: NoOpProcessor[T],
 		},
 
-		itemCount:      NewAtomicCounter(),
-		stopAccepting:  make(chan struct{}),
-		doneChan:       make(chan struct{}),
-		batchInputChan: chann.New[T](chann.Cap(-1)),
+		itemCount:     NewAtomicCounter(),
+		stopAccepting: make(chan struct{}),
+		doneChan:      make(chan struct{}),
 	}
 
 	for _, option := range options {
 		option(b)
+	}
+
+	if b.config.MaxQueueSize > 0 {
+		b.boundedInputCh = make(chan T, b.config.MaxQueueSize)
+	} else {
+		b.batchInputChan = chann.New[T](chann.Cap(-1))
 	}
 
 	b.errorsChan = chann.New[error](chann.Cap(-1))
@@ -84,6 +90,8 @@ func (b *Batcher[T]) Add(item T) {
 }
 
 func (b *Batcher[T]) Enqueue(ctx context.Context, item T) error {
+	inputCh := b.inputSendCh()
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -105,9 +113,31 @@ func (b *Batcher[T]) Enqueue(ctx context.Context, item T) error {
 		return ctx.Err()
 	case <-b.stopAccepting:
 		return ErrClosing
-	case b.batchInputChan.In() <- item:
+	case inputCh <- item:
 		b.itemCount.Add(1)
 		return nil
+	}
+}
+
+func (b *Batcher[T]) inputSendCh() chan<- T {
+	if b.boundedInputCh != nil {
+		return b.boundedInputCh
+	}
+
+	return b.batchInputChan.In()
+}
+
+func (b *Batcher[T]) inputRecvCh() <-chan T {
+	if b.boundedInputCh != nil {
+		return b.boundedInputCh
+	}
+
+	return b.batchInputChan.Out()
+}
+
+func (b *Batcher[T]) closeInput() {
+	if b.batchInputChan != nil {
+		b.batchInputChan.Close()
 	}
 }
 
@@ -133,7 +163,9 @@ func (b *Batcher[T]) Join(timeout time.Duration) error {
 
 func (b *Batcher[T]) startProcessing() {
 	defer b.errorsChan.Close()
-	defer b.batchInputChan.Close()
+	defer b.closeInput()
+
+	inputCh := b.inputRecvCh()
 
 	var (
 		batch  []T
@@ -176,7 +208,7 @@ func (b *Batcher[T]) startProcessing() {
 		select {
 		case <-b.doneChan:
 			return
-		case item, ok := <-b.batchInputChan.Out():
+		case item, ok := <-inputCh:
 			if !ok {
 				return
 			}
