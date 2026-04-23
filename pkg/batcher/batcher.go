@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.design/x/chann"
@@ -33,10 +34,13 @@ type Batcher[T any] struct {
 	config *Config[T]
 
 	isClosed       bool
+	started        atomic.Bool
+	startOnce      sync.Once
 	closeOnce      sync.Once
 	itemCount      *AtomicCounter
 	stopAccepting  chan struct{}
 	doneChan       chan struct{}
+	processingDone chan struct{}
 	errorsChan     *chann.Chann[error]
 	boundedInputCh chan T
 	batchInputChan *chann.Chann[T]
@@ -53,9 +57,10 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 			ProcessorFunc: NoOpProcessor[T],
 		},
 
-		itemCount:     NewAtomicCounter(),
-		stopAccepting: make(chan struct{}),
-		doneChan:      make(chan struct{}),
+		itemCount:      NewAtomicCounter(),
+		stopAccepting:  make(chan struct{}),
+		doneChan:       make(chan struct{}),
+		processingDone: make(chan struct{}),
 	}
 
 	for _, option := range options {
@@ -78,7 +83,16 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 }
 
 func (b *Batcher[T]) Start() {
-	go b.startProcessing()
+	select {
+	case <-b.stopAccepting:
+		return
+	default:
+	}
+
+	b.startOnce.Do(func() {
+		b.started.Store(true)
+		go b.startProcessing()
+	})
 }
 
 func (b *Batcher[T]) Config() *Config[T] {
@@ -162,8 +176,8 @@ func (b *Batcher[T]) Join(timeout time.Duration) error {
 }
 
 func (b *Batcher[T]) startProcessing() {
+	defer close(b.processingDone)
 	defer b.errorsChan.Close()
-	defer b.closeInput()
 
 	inputCh := b.inputRecvCh()
 
@@ -264,9 +278,19 @@ func (b *Batcher[T]) Close() error {
 		// Signal shutdown to the processing goroutine
 		close(b.doneChan)
 
-		// Give the goroutine a moment to exit cleanly
-		// This allows the deferred cleanup to run
-		time.Sleep(50 * time.Millisecond)
+		if b.started.Load() {
+			b.closeInput()
+
+			// Don't block forever if the processor is stuck in user code.
+			select {
+			case <-b.processingDone:
+			case <-time.After(50 * time.Millisecond):
+			}
+		} else {
+			b.closeInput()
+			b.errorsChan.Close()
+			close(b.processingDone)
+		}
 
 		b.isClosed = true
 	})

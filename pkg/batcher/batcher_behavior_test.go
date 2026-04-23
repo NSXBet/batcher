@@ -265,6 +265,23 @@ func TestErrorsChannelClosesWhenBatcherStops(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestErrorsChannelClosesWhenBatcherStopsWithoutStart(t *testing.T) {
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+	)
+
+	require.NoError(t, b.Close())
+
+	require.Eventually(t, func() bool {
+		select {
+		case _, ok := <-b.Errors():
+			return !ok
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestCloseFlushesPartialBatchAndIsIdempotent(t *testing.T) {
 	var (
 		mu   sync.Mutex
