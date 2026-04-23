@@ -8,6 +8,18 @@
 
 The dead-simple batching solution for golang applications.
 
+With batcher you can easily batch operations and run them asynchronously in batches.
+By default, batcher uses an unbounded internal queue so fire-and-forget producers
+can enqueue quickly. If you configure `WithMaxQueueSize`, batcher switches to a
+bounded queue that adds natural backpressure by blocking producers when the queue
+is full.
+
+This makes the package useful for two different producer styles:
+
+- fire-and-forget request paths that prefer the default unbounded queue and `Add`
+- pull-based consumers such as Kafka loops that benefit from bounded queues and
+  `Enqueue(ctx, item)`
+
 With batcher you can easily batch operations and run them asynchronously in batches:
 
 ```go
@@ -147,7 +159,7 @@ batcher := batcher.New[*BatchItem](
 
 ### Adding items to the batcher
 
-To add items to the batcher you can use the `Add` function:
+Use `Add` when you want the simplest producer API:
 
 ```go
 for i := 0; i < 1000; i++ {
@@ -157,6 +169,38 @@ for i := 0; i < 1000; i++ {
     })
 }
 ```
+
+`Add` is the convenience API:
+
+- in unbounded mode, it remains effectively immediate unless shutdown has started
+- in bounded mode, it blocks while the queue is full
+- once shutdown has started, it silently drops the item
+
+Use `Enqueue(ctx, item)` when the caller needs precise control over admission:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+defer cancel()
+
+err := batcher.Enqueue(ctx, &BatchItem{
+    ID:   42,
+    Name: "important-item",
+})
+if err != nil {
+    // err can be context.Canceled, context.DeadlineExceeded, or batcher.ErrClosing
+}
+```
+
+`Enqueue` is the explicit API:
+
+- in unbounded mode, it usually returns immediately unless shutdown has started
+- in bounded mode, it waits until there is queue capacity
+- if the caller's context is canceled while waiting, it returns the context error
+- if shutdown begins while waiting, it returns `batcher.ErrClosing`
+
+Calls that race exactly with `Close()` may still be accepted if the send wins
+before shutdown becomes visible. Accepted items are still drained by `Join()` or
+`Close()`.
 
 ### Waiting for all batches to process
 
@@ -171,7 +215,7 @@ if err := batcher.Join(timeout); err != nil {
 
 ### Stopping the batcher
 
-To stop the batcher you can use the `StopProcessing` function:
+To stop the batcher you can use the `Close` function:
 
 ```go
 defer batcher.Close()
@@ -199,10 +243,82 @@ You can get how many items are in the batcher by using the `Len` function:
 fmt.Printf("batcher has %d items\n", batcher.Len())
 ```
 
+### Choosing unbounded or bounded mode
+
+Batcher defaults to an unbounded internal queue:
+
+```go
+batcher := batcher.New[*BatchItem](
+    batcher.WithBatchSize[*BatchItem](100),
+    batcher.WithBatchInterval[*BatchItem](time.Second),
+)
+```
+
+This mode is a good default for request-scoped code that wants a cheap enqueue
+path and is willing to absorb bursts in memory.
+
+If you want natural backpressure, configure a bounded queue:
+
+```go
+batcher := batcher.New[*BatchItem](
+    batcher.WithBatchSize[*BatchItem](100),
+    batcher.WithBatchInterval[*BatchItem](time.Second),
+    batcher.WithMaxQueueSize[*BatchItem](1_000),
+)
+```
+
+In bounded mode:
+
+- producers block when the queue is full
+- waiting producers unblock as soon as the consumer drains capacity
+- `Add` silently drops once shutdown has started
+- `Enqueue` returns `batcher.ErrClosing` once shutdown has started
+
+The queue bound is about accepted-but-not-yet-drained items. It is most useful
+for consumer loops where slowing the producer is better than allowing memory
+growth during downstream slowness.
+
+### Kafka-style bounded backpressure
+
+Bounded queues pair well with pull-based consumers because backpressure on
+enqueue naturally slows how fast records move from the consumer loop into the
+batcher:
+
+```go
+for {
+    fetches := client.PollFetches(ctx)
+    if ctx.Err() != nil {
+        break
+    }
+
+    fetches.EachRecord(func(record *kgo.Record) {
+        item := &BatchItem{
+            ID:   int(record.Offset),
+            Name: string(record.Key),
+        }
+
+        if err := batcher.Enqueue(ctx, item); err != nil {
+            switch {
+            case errors.Is(err, context.Canceled):
+                return
+            case errors.Is(err, batcher.ErrClosing):
+                return
+            default:
+                log.Printf("enqueue failed: %v", err)
+            }
+        }
+    })
+}
+```
+
+This pattern is safer than `Add` for shutdown-aware consumers because the caller
+can observe cancellation, deadlines, and close-time rejection explicitly.
+
 ## Available Options to configure batcher
 
 - `WithBatchSize[*BatchItem](size int)`: sets the batch size.
 - `WithBatchInterval[*BatchItem](interval time.Duration)`: sets the batch interval.
+- `WithMaxQueueSize[*BatchItem](size int)`: sets the maximum queue size. Values less than or equal to zero keep the queue unbounded.
 - `WithProcessor(func(items []*BatchItem) error)`: sets the processor function.
 
 ## FX Integration
@@ -213,7 +329,6 @@ The batcher can be easily integrated with [uber-go/fx](https://github.com/uber-g
 package main
 
 import (
-    "fmt"
     "time"
 
     "go.uber.org/fx"
@@ -278,6 +393,7 @@ func main() {
             },
             2,                    // batch size
             time.Millisecond*100, // batch interval
+            0,                    // max queue size; use > 0 to enable bounded mode
         ),
         // Provide the request handler
         fx.Provide(NewRequestHandler),
@@ -301,6 +417,8 @@ This allows you to:
 - Let FX handle the dependency injection and lifecycle management
 
 The batcher will be automatically started when the FX app starts and stopped when the app stops.
+Pass a positive `maxQueueSize` to `ProvideBatcherInFX` when the Fx-managed
+application should run in bounded mode.
 
 ## Tests
 
@@ -316,26 +434,28 @@ For the most up-to-date benchmarks in this repository, you can access [this
 page](https://nsxbet.github.io/batcher/dev/bench/). These results are run every time someone merges a PR into the main
 branch.
 
-Our benchmarks are divided by batch size and should look like this (actual results depend on your machine):
+The benchmark suite is scenario-driven and compares unbounded and bounded queue
+modes side by side. It includes enqueue-only throughput, end-to-end batch
+throughput, concurrent producer contention, single-item latency, and
+shutdown/drain scenarios.
+
+The output should look roughly like this (actual results depend on your machine):
 
 ```bash
-Running benchmarks...
-2024-06-07T00:21:10.619-0300    INFO    test/helpers.go:30        processing items {"count": 1000}
 goos: linux
 goarch: amd64
 pkg: github.com/NSXBet/batcher/pkg/batcher
 cpu: Intel(R) Core(TM) i9-14900KF
-BenchmarkBatcherBatchSize10-24           4588717         255.4 ns/op
-BenchmarkBatcherBatchSize100-24          5017683         254.8 ns/op
-BenchmarkBatcherBatchSize1_000-24        4721426         235.4 ns/op
-BenchmarkBatcherBatchSize10_000-24       4603827         245.5 ns/op
-BenchmarkBatcherBatchSize100_000-24      4848703         244.8 ns/op
+BenchmarkBatcherEnqueueOnly/unbounded/steady_high_volume_flushes_by_size_batch_100-24
+BenchmarkBatcherEnqueueOnly/bounded_cap_100/steady_high_volume_flushes_by_size_batch_100-24
+BenchmarkBatcherConcurrentProducers/unbounded/many_producers_flush_by_size_batch_100-24
+BenchmarkBatcherConcurrentProducers/bounded_cap_100/many_producers_flush_by_size_batch_100-24
 PASS
 ok      github.com/NSXBet/batcher/pkg/batcher     26.988s
 ```
 
-These benchmarks take into account the time it takes to add items to the batcher, not the time to process the batches as
-that will vary depending on the processor function you pass to the batcher.
+The point of these benchmarks is to compare bounded and unbounded tradeoffs in
+the same workload families rather than to report one global "fastest" number.
 
 ## License
 
