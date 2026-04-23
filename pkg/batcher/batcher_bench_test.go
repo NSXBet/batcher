@@ -13,34 +13,89 @@ type benchItem struct {
 	ID int
 }
 
+type benchmarkQueueMode struct {
+	name         string
+	maxQueueSize int
+}
+
+func benchmarkQueueModes(batchSize int) []benchmarkQueueMode {
+	return []benchmarkQueueMode{
+		{name: "unbounded"},
+		{name: "bounded_cap_" + strconv.Itoa(batchSize), maxQueueSize: batchSize},
+		{name: "bounded_cap_" + strconv.Itoa(batchSize*4), maxQueueSize: batchSize * 4},
+	}
+}
+
+func benchmarkLatencyQueueModes() []benchmarkQueueMode {
+	return []benchmarkQueueMode{
+		{name: "unbounded"},
+		{name: "bounded_cap_1", maxQueueSize: 1},
+		{name: "bounded_cap_8", maxQueueSize: 8},
+	}
+}
+
+func newBenchmarkBatcher(
+	processor batcher.Processor[benchItem],
+	batchSize int,
+	interval time.Duration,
+	mode benchmarkQueueMode,
+) *batcher.Batcher[benchItem] {
+	options := []batcher.Option[benchItem]{
+		batcher.WithProcessor(processor),
+		batcher.WithBatchSize[benchItem](batchSize),
+		batcher.WithBatchInterval[benchItem](interval),
+	}
+
+	if mode.maxQueueSize > 0 {
+		options = append(options, batcher.WithMaxQueueSize[benchItem](mode.maxQueueSize))
+	}
+
+	return batcher.New(options...)
+}
+
 func BenchmarkBatcherEnqueueOnly(b *testing.B) {
 	for _, batchSize := range []int{10, 100, 1000} {
-		b.Run("steady_high_volume_flushes_by_size_batch_"+strconv.Itoa(batchSize), func(b *testing.B) {
-			benchmarkEnqueueOnlySteadyLoad(b, batchSize)
-		})
+		for _, mode := range benchmarkQueueModes(batchSize) {
+			mode := mode
+			b.Run(mode.name+"/steady_high_volume_flushes_by_size_batch_"+strconv.Itoa(batchSize), func(b *testing.B) {
+				benchmarkEnqueueOnlySteadyLoad(b, batchSize, mode)
+			})
+		}
 	}
 }
 
 func BenchmarkBatcherEndToEnd(b *testing.B) {
 	for _, batchSize := range []int{10, 100, 1000} {
-		b.Run("steady_high_volume_processes_full_batch_of_"+strconv.Itoa(batchSize), func(b *testing.B) {
-			benchmarkEndToEndSizeFlush(b, batchSize)
+		for _, mode := range benchmarkQueueModes(batchSize) {
+			mode := mode
+			b.Run(mode.name+"/steady_high_volume_processes_full_batch_of_"+strconv.Itoa(batchSize), func(b *testing.B) {
+				benchmarkEndToEndSizeFlush(b, batchSize, mode)
+			})
+		}
+	}
+
+	for _, mode := range benchmarkQueueModes(100) {
+		mode := mode
+		b.Run(mode.name+"/burst_of_1000_items_drains_in_batches_of_100", func(b *testing.B) {
+			benchmarkBurstDrain(b, 1000, 100, mode)
 		})
 	}
 
-	b.Run("burst_of_1000_items_drains_in_batches_of_100", func(b *testing.B) {
-		benchmarkBurstDrain(b, 1000, 100)
-	})
-
-	b.Run("sparse_trickle_flushes_single_item_on_interval", func(b *testing.B) {
-		benchmarkEndToEndIntervalFlush(b, 2*time.Millisecond)
-	})
+	for _, mode := range benchmarkQueueModes(1000) {
+		mode := mode
+		b.Run(mode.name+"/sparse_trickle_flushes_single_item_on_interval", func(b *testing.B) {
+			benchmarkEndToEndIntervalFlush(b, 2*time.Millisecond, mode)
+		})
+	}
 }
 
 func BenchmarkBatcherShutdown(b *testing.B) {
-	b.Run("service_shutdown_drains_partial_batch_before_exit", func(b *testing.B) {
-		benchmarkShutdownFlush(b, 25, 100, 5*time.Millisecond)
-	})
+	for _, mode := range benchmarkQueueModes(100) {
+		mode := mode
+		b.Run(mode.name+"/service_shutdown_drains_partial_batch_before_exit", func(b *testing.B) {
+			benchmarkShutdownFlush(b, 25, 100, 5*time.Millisecond, mode)
+		})
+	}
 }
 
 // BenchmarkBatcherConcurrentProducers covers the dominant production usage:
@@ -49,24 +104,28 @@ func BenchmarkBatcherShutdown(b *testing.B) {
 // batchInputChan and shows per-Add latency under GOMAXPROCS-way concurrency.
 func BenchmarkBatcherConcurrentProducers(b *testing.B) {
 	for _, batchSize := range []int{10, 100, 1000} {
-		b.Run("many_producers_flush_by_size_batch_"+strconv.Itoa(batchSize), func(b *testing.B) {
-			benchmarkConcurrentProducers(b, batchSize)
-		})
+		for _, mode := range benchmarkQueueModes(batchSize) {
+			mode := mode
+			b.Run(mode.name+"/many_producers_flush_by_size_batch_"+strconv.Itoa(batchSize), func(b *testing.B) {
+				benchmarkConcurrentProducers(b, batchSize, mode)
+			})
+		}
 	}
 }
 
-func benchmarkConcurrentProducers(b *testing.B, batchSize int) {
+func benchmarkConcurrentProducers(b *testing.B, batchSize int, mode benchmarkQueueMode) {
 	b.ReportAllocs()
 
 	var processed atomic.Int64
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
+	batch := newBenchmarkBatcher(
+		func(items []benchItem) error {
 			processed.Add(int64(len(items)))
 			return nil
-		}),
-		batcher.WithBatchSize[benchItem](batchSize),
-		batcher.WithBatchInterval[benchItem](time.Second),
+		},
+		batchSize,
+		time.Second,
+		mode,
 	)
 	b.Cleanup(func() {
 		if err := batch.Close(); err != nil {
@@ -99,54 +158,61 @@ func benchmarkConcurrentProducers(b *testing.B, batchSize int) {
 // emits one item at a time and waits for the batch to be processed, modeling
 // low-traffic request-scoped use where every Add pays the full round-trip.
 func BenchmarkBatcherSingleItemLatency(b *testing.B) {
-	b.ReportAllocs()
+	for _, mode := range benchmarkLatencyQueueModes() {
+		mode := mode
+		b.Run(mode.name+"/one_item_per_request_round_trip", func(b *testing.B) {
+			b.ReportAllocs()
 
-	processed := make(chan int, 1)
+			processed := make(chan int, 1)
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
-			processed <- len(items)
-			return nil
-		}),
-		batcher.WithBatchSize[benchItem](1),
-		batcher.WithBatchInterval[benchItem](time.Second),
-	)
-	b.Cleanup(func() {
-		if err := batch.Close(); err != nil {
-			b.Fatalf("close error: %v", err)
-		}
-	})
+			batch := newBenchmarkBatcher(
+				func(items []benchItem) error {
+					processed <- len(items)
+					return nil
+				},
+				1,
+				time.Second,
+				mode,
+			)
+			b.Cleanup(func() {
+				if err := batch.Close(); err != nil {
+					b.Fatalf("close error: %v", err)
+				}
+			})
 
-	b.ResetTimer()
+			b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
-		batch.Add(benchItem{ID: i})
-		if got := <-processed; got != 1 {
-			b.Fatalf("processed batch size %d, want 1", got)
-		}
+			for i := 0; i < b.N; i++ {
+				batch.Add(benchItem{ID: i})
+				if got := <-processed; got != 1 {
+					b.Fatalf("processed batch size %d, want 1", got)
+				}
+			}
+
+			b.StopTimer()
+
+			if err := batch.Join(10 * time.Second); err != nil {
+				b.Fatalf("join error: %v", err)
+			}
+
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
+		})
 	}
-
-	b.StopTimer()
-
-	if err := batch.Join(10 * time.Second); err != nil {
-		b.Fatalf("join error: %v", err)
-	}
-
-	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
 }
 
-func benchmarkEnqueueOnlySteadyLoad(b *testing.B, batchSize int) {
+func benchmarkEnqueueOnlySteadyLoad(b *testing.B, batchSize int, mode benchmarkQueueMode) {
 	b.ReportAllocs()
 
 	var processed atomic.Int64
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
+	batch := newBenchmarkBatcher(
+		func(items []benchItem) error {
 			processed.Add(int64(len(items)))
 			return nil
-		}),
-		batcher.WithBatchSize[benchItem](batchSize),
-		batcher.WithBatchInterval[benchItem](time.Second),
+		},
+		batchSize,
+		time.Second,
+		mode,
 	)
 	b.Cleanup(func() {
 		if err := batch.Close(); err != nil {
@@ -173,18 +239,19 @@ func benchmarkEnqueueOnlySteadyLoad(b *testing.B, batchSize int) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
 }
 
-func benchmarkEndToEndSizeFlush(b *testing.B, batchSize int) {
+func benchmarkEndToEndSizeFlush(b *testing.B, batchSize int, mode benchmarkQueueMode) {
 	b.ReportAllocs()
 
 	processed := make(chan int, 1)
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
+	batch := newBenchmarkBatcher(
+		func(items []benchItem) error {
 			processed <- len(items)
 			return nil
-		}),
-		batcher.WithBatchSize[benchItem](batchSize),
-		batcher.WithBatchInterval[benchItem](time.Second),
+		},
+		batchSize,
+		time.Second,
+		mode,
 	)
 	b.Cleanup(func() {
 		if err := batch.Close(); err != nil {
@@ -221,18 +288,19 @@ func benchmarkEndToEndSizeFlush(b *testing.B, batchSize int) {
 	b.ReportMetric(float64(totalItems)/b.Elapsed().Seconds(), "items/s")
 }
 
-func benchmarkEndToEndIntervalFlush(b *testing.B, interval time.Duration) {
+func benchmarkEndToEndIntervalFlush(b *testing.B, interval time.Duration, mode benchmarkQueueMode) {
 	b.ReportAllocs()
 
 	processed := make(chan int, 1)
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
+	batch := newBenchmarkBatcher(
+		func(items []benchItem) error {
 			processed <- len(items)
 			return nil
-		}),
-		batcher.WithBatchSize[benchItem](1000),
-		batcher.WithBatchInterval[benchItem](interval),
+		},
+		1000,
+		interval,
+		mode,
 	)
 	b.Cleanup(func() {
 		if err := batch.Close(); err != nil {
@@ -259,18 +327,19 @@ func benchmarkEndToEndIntervalFlush(b *testing.B, interval time.Duration) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "items/s")
 }
 
-func benchmarkBurstDrain(b *testing.B, burstSize int, batchSize int) {
+func benchmarkBurstDrain(b *testing.B, burstSize int, batchSize int, mode benchmarkQueueMode) {
 	b.ReportAllocs()
 
 	processed := make(chan int, burstSize/batchSize+1)
 
-	batch := batcher.New(
-		batcher.WithProcessor(func(items []benchItem) error {
+	batch := newBenchmarkBatcher(
+		func(items []benchItem) error {
 			processed <- len(items)
 			return nil
-		}),
-		batcher.WithBatchSize[benchItem](batchSize),
-		batcher.WithBatchInterval[benchItem](time.Second),
+		},
+		batchSize,
+		time.Second,
+		mode,
 	)
 	b.Cleanup(func() {
 		if err := batch.Close(); err != nil {
@@ -303,7 +372,13 @@ func benchmarkBurstDrain(b *testing.B, burstSize int, batchSize int) {
 	b.ReportMetric(float64(b.N*burstSize)/b.Elapsed().Seconds(), "items/s")
 }
 
-func benchmarkShutdownFlush(b *testing.B, pendingItems int, batchSize int, interval time.Duration) {
+func benchmarkShutdownFlush(
+	b *testing.B,
+	pendingItems int,
+	batchSize int,
+	interval time.Duration,
+	mode benchmarkQueueMode,
+) {
 	b.ReportAllocs()
 
 	totalItems := 0
@@ -312,13 +387,14 @@ func benchmarkShutdownFlush(b *testing.B, pendingItems int, batchSize int, inter
 	for i := 0; i < b.N; i++ {
 		processed := make(chan int, 1)
 
-		batch := batcher.New(
-			batcher.WithProcessor(func(items []benchItem) error {
+		batch := newBenchmarkBatcher(
+			func(items []benchItem) error {
 				processed <- len(items)
 				return nil
-			}),
-			batcher.WithBatchSize[benchItem](batchSize),
-			batcher.WithBatchInterval[benchItem](interval),
+			},
+			batchSize,
+			interval,
+			mode,
 		)
 
 		b.StartTimer()
