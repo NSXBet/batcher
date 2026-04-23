@@ -1,6 +1,7 @@
 package batcher_test
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -80,7 +81,7 @@ func TestBatchIntervalStartsWhenFirstItemArrives(t *testing.T) {
 			return nil
 		}),
 	)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	time.Sleep(160 * time.Millisecond)
 
@@ -114,7 +115,7 @@ func TestDoesNotEmitEmptyBatchesWhileIdle(t *testing.T) {
 			return nil
 		}),
 	)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	time.Sleep(70 * time.Millisecond)
 
@@ -166,7 +167,7 @@ func TestPreservesOrderingAcrossFullAndPartialBatches(t *testing.T) {
 			return nil
 		}),
 	)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	expectedKeys := make([]string, 0, 8)
 	for i := 0; i < 8; i++ {
@@ -184,6 +185,41 @@ func TestPreservesOrderingAcrossFullAndPartialBatches(t *testing.T) {
 	require.Equal(t, expectedKeys, keys)
 }
 
+func TestJoinThenClosePreservesAcceptedItems(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		keys []string
+	)
+
+	b := batcher.New(
+		batcher.WithBatchSize[test.BatchItem](100),
+		batcher.WithBatchInterval[test.BatchItem](20*time.Millisecond),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			for _, item := range items {
+				keys = append(keys, item.Key)
+			}
+
+			return nil
+		}),
+	)
+
+	b.Add(test.BatchItem{Key: "first"})
+	b.Add(test.BatchItem{Key: "second"})
+	b.Add(test.BatchItem{Key: "third"})
+
+	require.NoError(t, b.Join(500*time.Millisecond))
+	require.Equal(t, 0, b.Len())
+	require.NoError(t, b.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"first", "second", "third"}, keys)
+}
+
 func TestLenReturnsToZeroAfterProcessorErrors(t *testing.T) {
 	b := batcher.New(
 		batcher.WithBatchSize[test.BatchItem](10),
@@ -192,7 +228,7 @@ func TestLenReturnsToZeroAfterProcessorErrors(t *testing.T) {
 			return fmt.Errorf("processor failed for %d items", len(items))
 		}),
 	)
-	defer b.Close()
+	defer func() { _ = b.Close() }()
 
 	b.Add(test.BatchItem{Key: "first"})
 	b.Add(test.BatchItem{Key: "second"})
@@ -207,6 +243,48 @@ func TestLenReturnsToZeroAfterProcessorErrors(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timed out waiting for processor error")
 	}
+}
+
+func TestErrorsRemainObservableUntilClose(t *testing.T) {
+	processorErr := errors.New("processor failed")
+
+	b := batcher.New(
+		batcher.WithBatchSize[test.BatchItem](1),
+		batcher.WithBatchInterval[test.BatchItem](time.Second),
+		batcher.WithProcessor(func(items []test.BatchItem) error {
+			return processorErr
+		}),
+	)
+
+	b.Add(test.BatchItem{Key: "first"})
+
+	select {
+	case err := <-b.Errors():
+		require.ErrorIs(t, err, processorErr)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for processor error")
+	}
+
+	select {
+	case _, ok := <-b.Errors():
+		if !ok {
+			t.Fatal("errors channel closed before Close")
+		}
+
+		t.Fatal("received unexpected extra error before Close")
+	default:
+	}
+
+	require.NoError(t, b.Close())
+
+	require.Eventually(t, func() bool {
+		select {
+		case _, ok := <-b.Errors():
+			return !ok
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestErrorsChannelClosesWhenBatcherStops(t *testing.T) {

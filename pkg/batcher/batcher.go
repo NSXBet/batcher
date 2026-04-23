@@ -73,8 +73,8 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
-	b.batchInputChan.In() <- item
 	b.itemCount.Add(1)
+	b.batchInputChan.In() <- item
 }
 
 func (b *Batcher[T]) Len() int {
@@ -141,9 +141,11 @@ func (b *Batcher[T]) startProcessing() {
 	for {
 		select {
 		case <-b.doneChan:
+			flush()
 			return
 		case item, ok := <-b.batchInputChan.Out():
 			if !ok {
+				flush()
 				return
 			}
 
