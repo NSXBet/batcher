@@ -47,6 +47,7 @@ func TestProvideBatcherInFX(t *testing.T) {
 			},
 			2,                    // batch size
 			time.Millisecond*100, // batch interval
+			0,                    // max queue size (unbounded)
 		),
 		fx.Populate(&b, &p), // Populate the batcher variable
 	)
@@ -54,6 +55,7 @@ func TestProvideBatcherInFX(t *testing.T) {
 	// Start the app
 	app.RequireStart()
 	require.NotNil(t, b, "batcher should be populated")
+	require.Zero(t, b.Config().MaxQueueSize)
 
 	// Add some items to the batcher
 	b.Add(&BatchItem{ID: 1, Name: "item1"})
@@ -86,12 +88,14 @@ func TestProvideBatcherInFXStopFlushesPartialBatch(t *testing.T) {
 			},
 			10,
 			30*time.Millisecond,
+			64,
 		),
 		fx.Populate(&b, &p),
 	)
 
 	app.RequireStart()
 	require.NotNil(t, b, "batcher should be populated")
+	require.Equal(t, 64, b.Config().MaxQueueSize)
 
 	b.Add(&BatchItem{ID: 1, Name: "item1"})
 	b.Add(&BatchItem{ID: 2, Name: "item2"})

@@ -25,6 +25,7 @@ func TestCanCreateBatcherWithDefaultConfig(t *testing.T) {
 	require.NotNil(t, b)
 	require.Equal(t, batcher.DefaultBatchSize, b.Config().BatchSize)
 	require.Equal(t, batcher.DefaultBatchInterval, b.Config().BatchInterval)
+	require.Zero(t, b.Config().MaxQueueSize)
 
 	expected = batcher.NoOpProcessor[test.BatchItem]
 	actual = b.Config().ProcessorFunc
@@ -42,12 +43,14 @@ func TestCanCreateBatcher(t *testing.T) {
 		batcher.WithProcessor(noop),
 		batcher.WithBatchSize[test.BatchItem](1000),
 		batcher.WithBatchInterval[test.BatchItem](1*time.Second),
+		batcher.WithMaxQueueSize[test.BatchItem](42),
 	)
 
 	// ASSERT
 	require.NotNil(t, b)
 	require.Equal(t, 1000, b.Config().BatchSize)
 	require.Equal(t, 1*time.Second, b.Config().BatchInterval)
+	require.Equal(t, 42, b.Config().MaxQueueSize)
 }
 
 func TestCanAddItemsToBatch(t *testing.T) {

@@ -49,6 +49,7 @@ func TestREADMEExample(t *testing.T) {
 			},
 			2,                    // batch size
 			time.Millisecond*100, // batch interval
+			0,                    // max queue size (unbounded)
 		),
 		// Provide the request handler
 		fx.Provide(NewRequestHandler),

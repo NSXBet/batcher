@@ -74,3 +74,36 @@ func TestWithBatchInterval(t *testing.T) {
 		require.Equal(t, batcher.DefaultBatchInterval, b.Config().BatchInterval)
 	})
 }
+
+func TestWithMaxQueueSize(t *testing.T) {
+	// ARRANGE
+	b := batcher.New[test.BatchItem]()
+
+	// ACT
+	batcher.WithMaxQueueSize[test.BatchItem](128)(b)
+
+	// ASSERT
+	require.Equal(t, 128, b.Config().MaxQueueSize)
+
+	t.Run("WithMaxQueueSize - zero keeps unbounded", func(t *testing.T) {
+		// ARRANGE
+		b := batcher.New[test.BatchItem]()
+
+		// ACT
+		batcher.WithMaxQueueSize[test.BatchItem](0)(b)
+
+		// ASSERT
+		require.Equal(t, 0, b.Config().MaxQueueSize)
+	})
+
+	t.Run("WithMaxQueueSize - negative keeps unbounded", func(t *testing.T) {
+		// ARRANGE
+		b := batcher.New[test.BatchItem]()
+
+		// ACT
+		batcher.WithMaxQueueSize[test.BatchItem](-10)(b)
+
+		// ASSERT
+		require.Equal(t, 0, b.Config().MaxQueueSize)
+	})
+}

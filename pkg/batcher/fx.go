@@ -11,6 +11,7 @@ func ProvideBatcherInFX[T any](
 	processorFactory any,
 	batchSize int,
 	batchInterval time.Duration,
+	maxQueueSize int,
 ) fx.Option {
 	return fx.Module(
 		"batcher",
@@ -24,6 +25,7 @@ func ProvideBatcherInFX[T any](
 					WithProcessor(processorFunc),
 					WithBatchSize[T](batchSize),
 					WithBatchInterval[T](batchInterval),
+					WithMaxQueueSize[T](maxQueueSize),
 					WithSkipAutoStart[T](),
 				)
 

@@ -35,6 +35,18 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 	}
 }
 
+// WithMaxQueueSize sets the maximum queue size.
+// A value less than or equal to zero keeps the queue unbounded.
+func WithMaxQueueSize[T any](maxQueueSize int) Option[T] {
+	return func(b *Batcher[T]) {
+		if maxQueueSize <= 0 {
+			maxQueueSize = 0
+		}
+
+		b.config.MaxQueueSize = maxQueueSize
+	}
+}
+
 // WithSkipAutoStart skips the automatic start of the batcher.
 func WithSkipAutoStart[T any]() Option[T] {
 	return func(b *Batcher[T]) {

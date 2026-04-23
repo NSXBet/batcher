@@ -21,6 +21,7 @@ type Config[T any] struct {
 	SkipAutoStart bool
 	BatchSize     int
 	BatchInterval time.Duration
+	MaxQueueSize  int
 	Concurrency   int
 	ProcessorFunc Processor[T]
 }
@@ -42,6 +43,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 		config: &Config[T]{
 			BatchSize:     DefaultBatchSize,
 			BatchInterval: DefaultBatchInterval,
+			MaxQueueSize:  0,
 			Concurrency:   DefaultConcurrency,
 			ProcessorFunc: NoOpProcessor[T],
 		},
