@@ -1,6 +1,7 @@
 package batcher_test
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -257,4 +258,42 @@ func TestCloseFlushesPartialBatchAndIsIdempotent(t *testing.T) {
 	defer mu.Unlock()
 
 	require.Equal(t, []string{"first", "second", "third"}, keys)
+}
+
+func TestEnqueueReturnsContextErrorWhenAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	b := batcher.New[test.BatchItem]()
+	defer b.Close()
+
+	err := b.Enqueue(ctx, test.BatchItem{Key: "canceled"})
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 0, b.Len())
+}
+
+func TestEnqueueReturnsClosingErrorAfterClose(t *testing.T) {
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+	)
+
+	require.NoError(t, b.Close())
+
+	err := b.Enqueue(context.Background(), test.BatchItem{Key: "late"})
+
+	require.ErrorIs(t, err, batcher.ErrClosing)
+	require.Equal(t, 0, b.Len())
+}
+
+func TestAddSilentlyDropsAfterClose(t *testing.T) {
+	b := batcher.New(
+		batcher.WithSkipAutoStart[test.BatchItem](),
+	)
+
+	require.NoError(t, b.Close())
+
+	b.Add(test.BatchItem{Key: "late"})
+
+	require.Equal(t, 0, b.Len())
 }

@@ -1,6 +1,8 @@
 package batcher
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -10,6 +12,7 @@ import (
 )
 
 var ErrTimeout = fmt.Errorf("timeout waiting for batches to complete")
+var ErrClosing = errors.New("batcher is closing")
 
 type Processor[T any] func([]T) error
 
@@ -32,6 +35,7 @@ type Batcher[T any] struct {
 	isClosed       bool
 	closeOnce      sync.Once
 	itemCount      *AtomicCounter
+	stopAccepting  chan struct{}
 	doneChan       chan struct{}
 	errorsChan     *chann.Chann[error]
 	batchInputChan *chann.Chann[T]
@@ -49,6 +53,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 		},
 
 		itemCount:      NewAtomicCounter(),
+		stopAccepting:  make(chan struct{}),
 		doneChan:       make(chan struct{}),
 		batchInputChan: chann.New[T](chann.Cap(-1)),
 	}
@@ -75,8 +80,35 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
-	b.batchInputChan.In() <- item
-	b.itemCount.Add(1)
+	_ = b.Enqueue(context.Background(), item)
+}
+
+func (b *Batcher[T]) Enqueue(ctx context.Context, item T) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	select {
+	case <-b.stopAccepting:
+		return ErrClosing
+	default:
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.stopAccepting:
+		return ErrClosing
+	case b.batchInputChan.In() <- item:
+		b.itemCount.Add(1)
+		return nil
+	}
 }
 
 func (b *Batcher[T]) Len() int {
@@ -178,6 +210,8 @@ func (b *Batcher[T]) Close() error {
 	var clErr error
 
 	b.closeOnce.Do(func() {
+		close(b.stopAccepting)
+
 		// Calculate timeout based on pending items, with a maximum of 10 seconds
 		timeout := time.Duration(2*2*math.Ceil(float64(b.Len())/float64(b.config.BatchSize))) *
 			b.config.BatchInterval
