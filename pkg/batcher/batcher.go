@@ -12,7 +12,10 @@ import (
 	"golang.design/x/chann"
 )
 
+// ErrTimeout indicates that Join or Close timed out before accepted work drained.
 var ErrTimeout = fmt.Errorf("timeout waiting for batches to complete")
+
+// ErrClosing indicates that the batcher stopped accepting new items.
 var ErrClosing = errors.New("batcher is closing")
 
 type Processor[T any] func([]T) error
@@ -25,6 +28,7 @@ type Config[T any] struct {
 	SkipAutoStart bool
 	BatchSize     int
 	BatchInterval time.Duration
+	// MaxQueueSize keeps the queue unbounded when it is less than or equal to zero.
 	MaxQueueSize  int
 	Concurrency   int
 	ProcessorFunc Processor[T]
@@ -103,6 +107,9 @@ func (b *Batcher[T]) Add(item T) {
 	_ = b.Enqueue(context.Background(), item)
 }
 
+// Enqueue adds an item to the batcher, waiting for queue capacity when needed.
+// It returns a context error when the caller stops waiting, or ErrClosing once
+// shutdown has started.
 func (b *Batcher[T]) Enqueue(ctx context.Context, item T) error {
 	inputCh := b.inputSendCh()
 
