@@ -1,6 +1,6 @@
 module github.com/NSXBet/batcher
 
-go 1.22.4
+go 1.24
 
 require (
 	github.com/destel/rill v0.1.2
@@ -8,7 +8,7 @@ require (
 	go.uber.org/atomic v1.11.0
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.27.0
-	golang.design/x/chann v0.1.2
+	golang.design/x/chann v0.2.1
 )
 
 require (
