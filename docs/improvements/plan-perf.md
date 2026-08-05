@@ -410,8 +410,12 @@ review proceeds.
 - Each benchmark's configured batch size equals the size in its name.
 - No formatting or payload allocation inside any timed region.
 - Allocations reported for every case.
-- `benchstat` over `-count=10` shows the previously mislabeled cases now differ
-  from the 100 case beyond noise.
+- `benchstat` over `-count=10` distinguishes the previously mislabeled 100k case
+  from the 100 case. Note the separation appears in **bytes/op**, not ns/op:
+  measured 238.5 B/op ± 5% versus 176.0 B/op ± 7%, while sec/op overlaps within
+  noise. That is expected — `Add` does the same work per item regardless of batch
+  size, and only the per-flush batch slice capacity differs — so ns/op must not
+  be used as the discriminator here.
 - No non-test file is modified.
 
 **Dependencies**: none.
