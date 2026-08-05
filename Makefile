@@ -51,11 +51,11 @@ coverage-run:
 	@go test -coverprofile=coverage.out ./...
 
 coverage-report:
-	@cat coverage.out | grep -v "test/" > coverage-filtered.out
+	@cat coverage.out | grep -v "test/" | grep -v "internal/scenario/" > coverage-filtered.out
 	@go tool cover -func=coverage-filtered.out
 
 coverage-report-ci: coverage-run
-	@cat coverage.out | grep -v "test/" | grep -v "main.go" > coverage.txt
+	@cat coverage.out | grep -v "test/" | grep -v "internal/scenario/" | grep -v "main.go" > coverage.txt
 
 lint:
 	@docker run \
