@@ -42,7 +42,7 @@ bench-enqueue:
 
 # Full reporting matrix. Informational: produces measurements, not pass/fail.
 bench-matrix:
-	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 40m -v ./internal/scenario/
+	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 40m -v ./test/scenario/
 
 coverage: coverage-run coverage-report
 
@@ -51,11 +51,11 @@ coverage-run:
 	@go test -coverprofile=coverage.out ./...
 
 coverage-report:
-	@cat coverage.out | grep -v "test/" | grep -v "internal/scenario/" > coverage-filtered.out
+	@cat coverage.out | grep -v "test/" > coverage-filtered.out
 	@go tool cover -func=coverage-filtered.out
 
 coverage-report-ci: coverage-run
-	@cat coverage.out | grep -v "test/" | grep -v "internal/scenario/" | grep -v "main.go" > coverage.txt
+	@cat coverage.out | grep -v "test/" | grep -v "main.go" > coverage.txt
 
 lint:
 	@docker run \

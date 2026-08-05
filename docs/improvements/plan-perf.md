@@ -424,8 +424,9 @@ review proceeds.
 
 **Commit scope**
 
-Build a deterministic, in-repo harness with mock processors and no network
-dependency. It must be **open-loop**: arrivals follow a precomputed schedule and
+Build a deterministic, in-repo harness in `test/scenario` (test infrastructure,
+not `internal/`, which is reserved for library code) with mock processors and no
+network dependency. It must be **open-loop**: arrivals follow a precomputed schedule and
 are never gated on completion or on capacity, so overload cannot suppress
 arrivals (coordinated omission).
 

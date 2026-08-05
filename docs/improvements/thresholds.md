@@ -32,7 +32,7 @@ the blocking signal rather than timings.
 | `Add` allocations, unbounded path       | exactly 0 | `TestAddAllocationsPerCall`              |
 | `Stats()` allocations                   | exactly 0 | added with `Stats()` in Phase 2          |
 | Recovery wrapper allocations, non-panic | exactly 0 | added with panic recovery in Phase 2     |
-| Scenario recorder allocations per item  | no growth | `TestHarnessRecorderDoesNotAllocatePerItem` |
+| Scenario recorder allocations per item  | no growth | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
 
 `Add` currently allocates 0 per call in the timed region because the item is
 constructed by the caller. Phase 2 replaces `chann` with a slice-backed unbounded

@@ -60,7 +60,7 @@ jobs:
         env:
           SCENARIO_MATRIX: "1"
         run: |
-          go test -run TestScenarioMatrix -timeout 40m -v ./internal/scenario/ \
+          go test -run TestScenarioMatrix -timeout 40m -v ./test/scenario/ \
             | tee scenario-matrix.txt
       - name: Enqueue benchmarks with benchstat input
         run: |

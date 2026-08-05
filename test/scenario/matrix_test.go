@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NSXBet/batcher/internal/scenario"
+	"github.com/NSXBet/batcher/test/scenario"
 )
 
 // TestScenarioMatrix runs the sweep that Phase 5 uses to choose a default batch
@@ -18,7 +18,7 @@ import (
 //
 // Run with:
 //
-//	SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 30m ./internal/scenario/
+//	SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 30m ./test/scenario/
 func TestScenarioMatrix(t *testing.T) {
 	if os.Getenv("SCENARIO_MATRIX") == "" {
 		t.Skip("set SCENARIO_MATRIX=1 to run the reporting matrix")

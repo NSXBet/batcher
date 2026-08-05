@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NSXBet/batcher/internal/scenario"
+	"github.com/NSXBet/batcher/test/scenario"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,30 +35,36 @@ func TestHarnessIsOpenLoop(t *testing.T) {
 // TestHarnessReportsLatenessAndInvalidatesBadRuns asserts the validity guard.
 // Without it, a generator that itself fell behind would be reported as batcher
 // latency, which is how benchmark harnesses produce confidently wrong numbers.
+//
+// The guard is tested in both directions using budgets derived from the run's own
+// measured lateness. Asserting that some fixed budget is achievable would be
+// testing the host's scheduler, not the harness: a shared CI runner legitimately
+// shows several milliseconds of sleep overshoot.
 func TestHarnessReportsLatenessAndInvalidatesBadRuns(t *testing.T) {
 	t.Parallel()
 
-	healthy := scenario.Run(scenario.Config{
-		Name:           "healthy",
-		BatchSize:      100,
-		BatchInterval:  5 * time.Millisecond,
-		Arrival:        scenario.Sparse(100, 2*time.Millisecond),
-		Processor:      scenario.NoOpProcessor(),
-		LatenessBudget: 5 * time.Millisecond,
-	})
+	measure := func(budget time.Duration) scenario.Result {
+		return scenario.Run(scenario.Config{
+			Name:           "lateness-guard",
+			BatchSize:      100,
+			BatchInterval:  5 * time.Millisecond,
+			Arrival:        scenario.Sparse(100, 2*time.Millisecond),
+			Processor:      scenario.NoOpProcessor(),
+			LatenessBudget: budget,
+		})
+	}
 
-	require.True(t, healthy.LatenessValid,
-		"an idle no-op run must not be marked invalid (p99 lateness %s)", healthy.Lateness.P99)
+	// Probe what this host actually achieves, then assert the guard accepts a
+	// budget above it and rejects one below it.
+	probe := measure(time.Hour)
+	require.Positive(t, probe.Lateness.Count, "lateness must be recorded")
+	t.Logf("host p99 sleep overshoot: %s", probe.Lateness.P99)
 
-	strict := scenario.Run(scenario.Config{
-		Name:           "impossible-budget",
-		BatchSize:      100,
-		BatchInterval:  5 * time.Millisecond,
-		Arrival:        scenario.Sparse(100, 2*time.Millisecond),
-		Processor:      scenario.NoOpProcessor(),
-		LatenessBudget: time.Nanosecond, // no real scheduler can meet this
-	})
+	generous := measure(probe.Lateness.P99 + 50*time.Millisecond)
+	require.True(t, generous.LatenessValid,
+		"a run within its lateness budget must be valid (p99 %s)", generous.Lateness.P99)
 
+	strict := measure(time.Nanosecond) // no real scheduler can meet this
 	require.False(t, strict.LatenessValid,
 		"a run whose lateness exceeds its budget must be marked invalid")
 }
@@ -144,6 +150,11 @@ func TestReproducesInlineSlowProcessorInversion(t *testing.T) {
 // TestSmallWindowGivesNoOverloadProtection pins the second baseline finding:
 // shrinking the batch window does not bound queued work. Overload protection
 // requires bounded admission, which the library does not yet offer.
+//
+// The assertion is expressed relative to what the run actually achieved, not as
+// an absolute item count. A shared CI runner cannot offer the same rate as a
+// developer machine, and an absolute threshold would simply encode the host it
+// was written on.
 func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 	t.Parallel()
 
@@ -152,8 +163,12 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 	}
 
 	const (
-		rate     = 500_000
-		duration = 300 * time.Millisecond
+		// Offered far above what a 2ms-per-batch processor can retire, so the
+		// backlog is created by the capacity deficit rather than by any timing
+		// assumption about the host.
+		rate        = 500_000
+		duration    = 300 * time.Millisecond
+		serviceTime = 2 * time.Millisecond
 	)
 
 	for _, window := range []time.Duration{100 * time.Millisecond, 1 * time.Millisecond} {
@@ -162,7 +177,7 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 			BatchSize:      500,
 			BatchInterval:  window,
 			Arrival:        scenario.Steady(rate, duration),
-			Processor:      scenario.FixedProcessor(2 * time.Millisecond),
+			Processor:      scenario.FixedProcessor(serviceTime),
 			LatenessBudget: time.Second,
 		})
 
@@ -175,12 +190,18 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 			"window=%s: an unbounded queue must accept everything, which is exactly "+
 				"why a smaller window cannot protect the process", window)
 
-		// The load is deliberately far above what a 2ms processor can retire, so a
-		// large backlog must accumulate no matter how small the window is. This is
-		// the evidence that overload protection needs bounded admission, not a
-		// shorter timer.
-		require.Greater(t, result.PendingPeak, int64(rate/10),
-			"window=%s: expected a large backlog to accumulate under overload", window)
+		// Backlog must reflect the accept/complete deficit: whatever the host
+		// managed to offer, the queue absorbed the shortfall instead of pushing
+		// back. This holds on any hardware, because it is derived from the run's
+		// own accepted and completed rates.
+		require.Greater(t, result.AcceptedRate, result.CompletedRate,
+			"window=%s: accepted rate must exceed completed rate under overload", window)
+
+		deficit := (result.AcceptedRate - result.CompletedRate) * duration.Seconds()
+		require.Greater(t, float64(result.PendingPeak), deficit*0.5,
+			"window=%s: queued work must absorb the capacity deficit "+
+				"(peak=%d, deficit≈%.0f); a smaller window does not bound it",
+			window, result.PendingPeak, deficit)
 	}
 }
 
