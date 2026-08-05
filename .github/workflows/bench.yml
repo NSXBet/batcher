@@ -1,4 +1,14 @@
 ---
+# Historical benchmark tracking. INFORMATIONAL ONLY.
+#
+# This lane publishes the enqueue microbenchmark trend to GitHub Pages. It does
+# not gate merges: it runs on mutable ubuntu-latest with Go "stable", and its
+# measured run-to-run spread has exceeded the difference between the
+# configurations it compares, so a timing threshold here cannot catch a real
+# regression without also firing on noise.
+#
+# Blocking performance guards live in performance.yml (race detector and exact
+# allocation counts). Predeclared thresholds are in docs/improvements/thresholds.md.
 name: Go-Benchmarks
 on:
   push:
@@ -24,7 +34,10 @@ jobs:
           output-file-path: build/output.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
+          # Kept high and non-blocking on purpose: this is a trend record, not a
+          # gate. Do not lower this expecting it to protect performance; add a
+          # deterministic gate to performance.yml instead.
           alert-threshold: "200%"
           comment-on-alert: true
-          fail-on-alert: true
+          fail-on-alert: false
           alert-comment-cc-users: "@heynemann"

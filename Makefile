@@ -23,6 +23,27 @@ bench-announce:
 bench-run:
 	@go test -bench=. ./...
 
+# Blocking performance guards: stable on shared runners, unlike latency.
+# Thresholds are predeclared in docs/improvements/thresholds.md.
+guards: guards-race guards-allocs
+
+guards-race:
+	@echo "Running race detector..."
+	@go test -race ./...
+
+guards-allocs:
+	@echo "Checking allocation gates..."
+	@go test -run 'Alloc' -count=1 ./...
+
+# Enqueue microbenchmarks with statistics suitable for benchstat.
+bench-enqueue:
+	@go test -run='^$$' -bench='BenchmarkBatcherEnqueue' -benchmem \
+		-benchtime=3s -count=10 ./pkg/batcher
+
+# Full reporting matrix. Informational: produces measurements, not pass/fail.
+bench-matrix:
+	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 40m -v ./internal/scenario/
+
 coverage: coverage-run coverage-report
 
 coverage-run:
