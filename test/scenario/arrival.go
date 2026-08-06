@@ -118,6 +118,16 @@ func fixedRate(ratePerSecond int, duration time.Duration) []time.Duration {
 	}
 
 	gap := time.Second / time.Duration(ratePerSecond)
+
+	// A rate above one item per nanosecond truncates the gap to zero, which would
+	// panic on the division below. AtCapacity can reach that: a microsecond
+	// processor with a 1000-item batch yields a service rate of 1e9 items/s.
+	// Refuse an unrepresentable schedule rather than pretending to offer it: using
+	// a 1ns gap could allocate duration/1ns entries (100 million for a 100ms run).
+	if gap <= 0 {
+		return nil
+	}
+
 	count := int(duration / gap)
 
 	out := make([]time.Duration, count)

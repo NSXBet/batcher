@@ -2,6 +2,7 @@ package scenario_test
 
 import (
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -91,11 +92,18 @@ func TestHarnessRecorderDoesNotAllocatePerItem(t *testing.T) {
 		Processor:     scenario.NoOpProcessor(),
 	})
 
-	// Per-item allocations must not grow with run length. Batcher itself
-	// allocates per item today, so the absolute number is not zero; what matters
-	// is that the harness adds no per-item growth of its own.
+	// Two properties, both required by the threshold table.
+	//
+	// The absolute figure is not zero because AllocsPerItem measures the whole
+	// pipeline, including Batcher's own per-batch allocations, not just the
+	// recorder. What matters is that it stays small and does not grow with run
+	// length: a recorder that allocated per item would turn every allocation figure
+	// it reports into a measurement of itself.
+	require.LessOrEqual(t, large.AllocsPerItem, 1.0,
+		"per-item allocations must stay at or below 1 (got %.3f)", large.AllocsPerItem)
+
 	require.InDelta(t, small.AllocsPerItem, large.AllocsPerItem, 1.0,
-		"per-item allocations must not scale with run length (small=%.2f large=%.2f)",
+		"per-item allocations must not scale with run length (small=%.3f large=%.3f)",
 		small.AllocsPerItem, large.AllocsPerItem)
 }
 
@@ -173,18 +181,28 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 
 	for _, window := range []time.Duration{100 * time.Millisecond, 1 * time.Millisecond} {
 		result := scenario.Run(scenario.Config{
-			Name:           "overload",
-			BatchSize:      500,
-			BatchInterval:  window,
-			Arrival:        scenario.Steady(rate, duration),
-			Processor:      scenario.FixedProcessor(serviceTime),
+			Name:          "overload",
+			BatchSize:     500,
+			BatchInterval: window,
+			Arrival:       scenario.Steady(rate, duration),
+			Processor:     scenario.FixedProcessor(serviceTime),
+			// One goroutine cannot offer this rate: the inter-arrival gap is 2µs and
+			// real sleep granularity is tens of microseconds, so a single producer
+			// would stretch the run to seconds and collapse the offered rate toward
+			// the service rate. Spreading the schedule across CPUs keeps the offered
+			// rate near the intended one on any host.
+			Producers:      runtime.NumCPU(),
 			LatenessBudget: time.Second,
 		})
 
-		t.Logf("window=%-6s offered/s=%.0f accepted/s=%.0f completed/s=%.0f "+
-			"pending_peak=%d heap_peak=%dMB",
-			window, result.OfferedRate, result.AcceptedRate, result.CompletedRate,
+		t.Logf("window=%-6s offered_for=%s offered/s=%.0f accepted/s=%.0f "+
+			"completed/s=%.0f pending_peak=%d heap_peak=%dMB",
+			window, result.OfferedFor.Round(time.Millisecond),
+			result.OfferedRate, result.AcceptedRate, result.CompletedRate,
 			result.PendingPeak, result.HeapHighWater/(1<<20))
+
+		require.False(t, result.TimedOut,
+			"window=%s: the run must complete rather than time out", window)
 
 		require.Zero(t, result.RejectedCount,
 			"window=%s: an unbounded queue must accept everything, which is exactly "+
@@ -192,12 +210,13 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 
 		// Backlog must reflect the accept/complete deficit: whatever the host
 		// managed to offer, the queue absorbed the shortfall instead of pushing
-		// back. This holds on any hardware, because it is derived from the run's
-		// own accepted and completed rates.
+		// back. This holds on any hardware, because it is derived from the run's own
+		// rates over the run's own offered window rather than from the configured
+		// duration, which an open-loop generator may overshoot.
 		require.Greater(t, result.AcceptedRate, result.CompletedRate,
 			"window=%s: accepted rate must exceed completed rate under overload", window)
 
-		deficit := (result.AcceptedRate - result.CompletedRate) * duration.Seconds()
+		deficit := (result.AcceptedRate - result.CompletedRate) * result.OfferedFor.Seconds()
 		require.Greater(t, float64(result.PendingPeak), deficit*0.5,
 			"window=%s: queued work must absorb the capacity deficit "+
 				"(peak=%d, deficit≈%.0f); a smaller window does not bound it",

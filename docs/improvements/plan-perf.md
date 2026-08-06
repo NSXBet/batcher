@@ -505,7 +505,7 @@ Scenario matrix: windows `500µs, 1, 2, 5, 10, 20, 50, 100ms` × arrivals
   stated warmup and with the queue retaining capacity across drains. Growth-path
   allocations are exempt and must be named in the test.
 - Demote the current post-merge 200% threshold
-  (`.github/workflows/bench.yml:27-29`) to informational; it cannot catch
+  (`.github/workflows/bench.yml` `alert-threshold` / `fail-on-alert` settings) to informational; it cannot catch
   meaningful regressions and runs on mutable `ubuntu-latest` with Go `stable`.
 
 **Acceptance criteria**
@@ -1145,7 +1145,7 @@ any caller may wait longer with a fresh context. The one case the library cannot
 solve — a processor that never returns — is documented as a visible,
 non-terminal `draining` state instead of silent data loss.
 
-Serial users keep non-concurrent processing and FIFO by admission order. Users
+Serial users keep non-concurrent processing and FIFO by publication order. Users
 who explicitly acknowledge unordered processing get real worker concurrency,
 which is what stops a slow processor from inflating a 5-10ms window into tens or
 hundreds of milliseconds. Bounded admission is available for process protection,

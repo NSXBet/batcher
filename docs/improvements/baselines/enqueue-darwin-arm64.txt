@@ -1,6 +1,6 @@
 # Enqueue microbenchmark baseline
 #
-# environment: go version go1.26.5 darwin/arm64 darwin/arm64 gomaxprocs=12 cpu=Apple M4 Pro
+# environment: go version go1.26.5 darwin/arm64 gomaxprocs=12 cpu=Apple M4 Pro
 # commit: 6d05236
 # note: local developer baseline, NOT the CI reference runner (ubuntu-latest/amd64).
 #

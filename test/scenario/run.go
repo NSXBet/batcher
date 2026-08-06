@@ -1,7 +1,6 @@
 package scenario
 
 import (
-	"errors"
 	"math/rand"
 	"runtime"
 	"sync"
@@ -10,6 +9,11 @@ import (
 
 	"github.com/NSXBet/batcher/pkg/batcher"
 )
+
+// completionDeadline bounds how long a run waits for the processor to account for
+// every accepted item. Exceeding it marks the run as timed out rather than hanging
+// the whole sweep.
+const completionDeadline = 60 * time.Second
 
 // Item is the payload pushed through the batcher. It carries a flat index into
 // the preallocated recording slots, so the processor records timings with a
@@ -52,6 +56,12 @@ type Config struct {
 	// Seed fixes all randomness (arrival jitter and processor service time).
 	Seed int64
 
+	// CompletionDeadline bounds how long the harness waits for the processor to
+	// account for every accepted item. Zero selects the package default. A timeout
+	// is reported in Result rather than leaking the processor on a full completion
+	// channel.
+	CompletionDeadline time.Duration
+
 	// LatenessBudget marks a run invalid when the generator itself fell behind by
 	// more than this at p99. Without this guard, an overloaded generator would be
 	// silently reported as batcher latency.
@@ -71,12 +81,31 @@ func (c Config) withDefaults() Config {
 		c.LatenessBudget = 5 * time.Millisecond
 	}
 
+	if c.CompletionDeadline <= 0 {
+		c.CompletionDeadline = completionDeadline
+	}
+
 	return c
 }
 
 // Result is everything one run measured.
 type Result struct {
 	Config Config
+
+	// OfferedFor is the wall time spent offering the schedule. Offered and accepted
+	// rates are computed over this window, so any derived figure must use it rather
+	// than the configured duration: an open-loop generator on a slow host takes
+	// longer than its schedule implies.
+	OfferedFor time.Duration
+
+	// TimedOut reports that the run gave up waiting for completion. Latency and
+	// batching figures from such a run describe an incomplete run and must not be
+	// compared with a complete one.
+	TimedOut bool
+
+	// CloseErr is whatever shutting the batcher down reported. A non-nil value with
+	// TimedOut set usually means the processor was still blocked.
+	CloseErr error
 
 	// Validity
 	Lateness      Distribution
@@ -143,9 +172,21 @@ func Run(cfg Config) Result {
 	slots := make([]slot, len(schedule))
 
 	var (
-		batches     []int
-		batchesMu   sync.Mutex
-		completed   = make(chan int, 1024)
+		batches   []int
+		batchesMu sync.Mutex
+
+		// completedItems and completedSignal replace a buffered channel on purpose.
+		// A bounded channel blocks the processor forever once the waiter stops
+		// reading it, which happens whenever the completion deadline expires: the
+		// batcher's processing goroutine parks on the send, Close cannot drain, and
+		// each timed-out run leaks a goroutine and a blocked batch. The matrix sweep
+		// performs over a hundred runs in one process, so that compounds.
+		//
+		// An atomic counter with a non-blocking latch cannot block the processor at
+		// all, at the cost of the waiter re-reading the counter after each wakeup.
+		completedItems  atomic.Int64
+		completedSignal = make(chan struct{}, 1)
+
 		procRNG     = rand.New(rand.NewSource(cfg.Seed))
 		start       time.Time
 		goroutinePk = runtime.NumGoroutine()
@@ -172,7 +213,14 @@ func Run(cfg Config) Result {
 			batches = append(batches, len(items))
 			batchesMu.Unlock()
 
-			completed <- len(items)
+			completedItems.Add(int64(len(items)))
+
+			// Non-blocking: a latch that is already armed needs no second signal,
+			// because the waiter re-reads the counter after waking.
+			select {
+			case completedSignal <- struct{}{}:
+			default:
+			}
 
 			return cfg.Processor.Err
 		}),
@@ -276,16 +324,23 @@ func Run(cfg Config) Result {
 	}
 
 	// Wait for the processor to account for every accepted item.
-	deadline := time.NewTimer(60 * time.Second)
+	deadline := time.NewTimer(cfg.CompletionDeadline)
 	defer deadline.Stop()
 
-	for done := 0; done < totalAccepted; {
+	timedOut := false
+
+	for completedItems.Load() < int64(totalAccepted) {
 		select {
-		case n := <-completed:
-			done += n
+		case <-completedSignal:
+			// Re-check the counter on the next loop iteration.
 		case <-deadline.C:
-			// Give up rather than hang; the result will show the shortfall.
-			done = totalAccepted
+			// Give up rather than hang. The shortfall is reported rather than
+			// silently folded into the completion counts.
+			timedOut = true
+		}
+
+		if timedOut {
+			break
 		}
 	}
 
@@ -296,13 +351,16 @@ func Run(cfg Config) Result {
 
 	runtime.ReadMemStats(&memAfter)
 
-	if err := b.Close(); err != nil && !errors.Is(err, batcher.ErrTimeout) {
-		// Close errors are reported through the result's completed counts.
-		_ = err
-	}
+	closeErr := b.Close()
 
 	<-errsDone
 
-	return summarise(cfg, slots, batches, offeredFor, runDuration,
+	result := summarise(cfg, slots, batches, offeredFor, runDuration,
 		memBefore, memAfter, goroutinePk, heapPeak.Load(), pendingPeak.Load())
+
+	result.OfferedFor = offeredFor
+	result.TimedOut = timedOut
+	result.CloseErr = closeErr
+
+	return result
 }
