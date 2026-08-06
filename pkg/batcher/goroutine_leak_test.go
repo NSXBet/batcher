@@ -10,13 +10,13 @@ import (
 
 	"github.com/NSXBet/batcher/pkg/batcher"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
+	"sync/atomic"
 )
 
 // TestBatcher_GoroutineCleanupOnStop is the main regression test for goroutine leaks.
 // It reproduces the issue where goroutines remain blocked after Close() is called.
 func TestBatcher_GoroutineCleanupOnStop(t *testing.T) {
-	processCount := atomic.NewInt32(0)
+	var processCount atomic.Int32
 
 	processor := func(items []string) error {
 		count := processCount.Add(1)
@@ -85,7 +85,7 @@ func TestBatcher_GoroutineCleanupOnStop(t *testing.T) {
 
 // TestBatcher_StopWithPendingMessages tests that pending messages don't block goroutine cleanup.
 func TestBatcher_StopWithPendingMessages(t *testing.T) {
-	processedBatches := atomic.NewInt32(0)
+	var processedBatches atomic.Int32
 
 	processor := func(items []string) error {
 		processedBatches.Add(1)
@@ -139,7 +139,7 @@ func TestBatcher_StopWithPendingMessages(t *testing.T) {
 
 // TestBatcher_StopWhileProcessing tests cleanup when the processor is actively working.
 func TestBatcher_StopWhileProcessing(t *testing.T) {
-	processing := atomic.NewBool(false)
+	var processing atomic.Bool
 	processingDone := make(chan struct{})
 
 	processor := func(items []string) error {
@@ -206,7 +206,7 @@ func TestBatcher_StopWhileProcessing(t *testing.T) {
 
 // TestBatcher_StopWithFailingProcessor tests cleanup when the processor consistently fails.
 func TestBatcher_StopWithFailingProcessor(t *testing.T) {
-	processCount := atomic.NewInt32(0)
+	var processCount atomic.Int32
 
 	processor := func(items []string) error {
 		processCount.Add(1)

@@ -64,9 +64,16 @@ Compare with `benchstat` over `-count=10`. A single run is not evidence. This is
 | Goroutines per running `n>1`        | exactly 1 + n                      |
 | Goroutines after terminal `closed`  | equal to pre-construction baseline |
 
-Current `main` owns 6 goroutines per batcher: 1 aggregator, 2 `rill` pipeline
-relays, and 2 `chann` relays plus the pipeline's batch goroutine. Phase 2.1
-removes `rill` (6 → 3) and Phase 2.2 removes `chann` (3 → 1).
+Current `main` owns 6 goroutines per batcher. Phase 2.1 removes `rill`
+(**measured 6 → 5**) and Phase 2.2 removes both `chann` relays and the input
+forwarder they require (5 → 2: aggregator plus processor).
+
+The 6 → 5 figure supersedes earlier 6 → 3 and 6 → 4 estimates. Fewer goroutines
+were unreachable without changing observable behaviour: merging aggregation into
+the processing loop inverted the documented latency baseline, and merging input
+draining into aggregation regressed sequential `Add` by 39-50% because the
+`chann` relay's bounded ingress was not drained promptly. The "exactly 1" row
+above applies only from Phase 3, once the worker model is owned.
 
 ## Conditional gates (Milestone 4.2 only)
 

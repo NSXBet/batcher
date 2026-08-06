@@ -567,9 +567,32 @@ reviewable behaviour-preserving change.
 - Characterization tests written pre-swap pass unchanged post-swap: batch
   boundaries, timer-armed-on-first-item behaviour, ordering, error propagation,
   no-empty-batch guarantee.
-- Goroutines per *constructed, auto-started* batcher drop from 6 to 3, verified by
-  test. (2.2 removes the remaining two by replacing `chann`, reaching 1 per
-  running batcher and 0 for an unstarted one.)
+- Goroutines per *constructed, auto-started* batcher drop from 6 to **5**,
+  verified by test and by direct measurement (50 batchers: +250 goroutines, 0
+  leaked after `Close`).
+
+  The plan first predicted 3, then 4. Both were wrong, and the reasons are worth
+  recording because they constrain the design:
+
+  1. **Merging aggregation into the processing loop changes latency.** Measured
+     with a 50ms processor at 10k items/s, a merged loop inverted the baseline
+     finding (5ms window p50 28ms versus 100ms window p50 75ms), because the next
+     batch only began accumulating after the processor returned. Aggregation and
+     processing must stay separate goroutines here; decoupling them differently
+     is a Phase 3 decision, not one this milestone may smuggle in.
+  2. **Input draining must be isolated from batch bookkeeping.** With a single
+     goroutine doing both, sequential `Add` regressed 39-50% against the stored
+     baseline, breaching the ≤+10% gate: the `chann` relay has a small bounded
+     ingress, and its output was not being read promptly while the aggregator was
+     busy with timer and slice work. Adding a dedicated forwarding stage restored
+     parity (no regression; one case 6.7% faster). This is what `rill`'s
+     `ToChans`/`Batch`/`FromChans` pipeline was buying.
+
+  The five are: `chann` input relay, input forwarder, aggregator, processor loop,
+  and `chann` error relay. Phase 2.2 removes both `chann` relays and the
+  forwarder along with them, because an owned queue needs no relay and can be
+  read directly. The single-goroutine target in the threshold table applies only
+  once Phase 3 owns the worker model.
 - Enqueue benchmarks from 1.1 show no regression beyond predeclared thresholds.
 - `go.mod`/`go.sum` no longer reference `rill`; no other dependency added.
 - No public API change in this commit.
@@ -1032,7 +1055,9 @@ rather than intuition.
   deadline; **`Len()` now counting accepted-but-unfinished work including
   in-flight batches, so it can be non-zero with an empty queue**; `Join`'s
   clarified quiescence-snapshot contract; the removal of the `rill` and `chann`
-  dependencies; and any `ProvideBatcherInFX` signature change.
+  dependencies; **the module's minimum Go version moving from 1.22.4 to 1.25.0**
+  (required by `golang.org/x/sys` v0.46.0, pulled in when dependencies were
+  modernised in 2.1); and any `ProvideBatcherInFX` signature change.
 - **`Config()` must stop exposing live mutable state.** It currently returns the
   internal pointer (`batcher.go:76-78`), letting callers mutate `ProcessorFunc`
   or `BatchSize` during processing — an exported data race that can invalidate
@@ -1135,7 +1160,8 @@ commit leaves the library in a consistent state, so any prefix of the plan is a
 valid stopping point:
 
 - Stopping after **1.x**: measurement only, no behaviour change.
-- Stopping after **2.1**: same semantics, `rill` removed, goroutines 6 → 3.
+- Stopping after **2.1**: same semantics, `rill` removed, goroutines 6 → 5,
+  and ~47% less memory per enqueued item.
 - Stopping after **2.2**: admission is panic-free, accounting is sound, `chann`
   is gone (1 goroutine per running batcher, 0 idle), and the internal
   seal/gate/`noInput` coordinator is complete. `Close()` keeps its existing

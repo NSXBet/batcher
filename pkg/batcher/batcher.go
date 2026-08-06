@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/destel/rill"
 	"golang.design/x/chann"
 )
 
@@ -34,8 +33,8 @@ type Batcher[T any] struct {
 	itemCount      *AtomicCounter
 	doneChan       chan struct{}
 	errorsChan     *chann.Chann[error]
-	batchInputChan *chann.Chann[rill.Try[T]]
-	batchesChan    <-chan rill.Try[[]T]
+	batchInputChan *chann.Chann[T]
+	batchesChan    <-chan []T
 }
 
 // New creates a new Batcher with the given options.
@@ -50,7 +49,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 
 		itemCount:      NewAtomicCounter(),
 		doneChan:       make(chan struct{}),
-		batchInputChan: chann.New[rill.Try[T]](chann.Cap(-1)),
+		batchInputChan: chann.New[T](chann.Cap(-1)),
 	}
 
 	for _, option := range options {
@@ -58,15 +57,141 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	}
 
 	b.errorsChan = chann.New[error](chann.Cap(-1))
-
-	batchOutput := rill.Batch(b.batchInputChan.Out(), b.config.BatchSize, b.config.BatchInterval)
-	b.batchesChan = batchOutput
+	b.batchesChan = aggregate(
+		forward(b.batchInputChan.Out()),
+		b.config.BatchSize,
+		b.config.BatchInterval,
+	)
 
 	if !b.config.SkipAutoStart {
 		b.Start()
 	}
 
 	return b
+}
+
+// forward relays items from the unbounded input queue onto an unbuffered channel,
+// closing it when the source is closed.
+//
+// This stage exists for a measured reason, not for symmetry. The unbounded queue
+// has a small bounded ingress buffer, so its output has to be consumed promptly
+// or producers start paying for the backlog. When the aggregator read that output
+// directly, sequential Add regressed 39-50% against the stored baseline, because
+// the aggregator interleaves reads with timer and slice bookkeeping. Splitting the
+// drain out restored parity. It is the same separation rill's pipeline provided.
+//
+// Phase 2.2 removes this stage along with the unbounded queue itself: an owned
+// queue can be read directly without a relay.
+func forward[T any](in <-chan T) <-chan T {
+	out := make(chan T)
+
+	go func() {
+		defer close(out)
+
+		for item := range in {
+			out <- item
+		}
+	}()
+
+	return out
+}
+
+// aggregate groups items from in into batches, emitting a batch when it reaches
+// size, when interval elapses, or when in is closed.
+//
+// This replaces rill.Batch and deliberately preserves its semantics, which the
+// characterization tests pin:
+//
+//   - The interval timer is armed when the first item enters an empty batch, not
+//     on a periodic tick. A sparse producer therefore waits one full interval per
+//     item, and an idle batcher performs no work at all.
+//   - A batch reaching n is emitted immediately, without waiting for the timer.
+//   - Empty batches are never emitted, so a processor always receives at least
+//     one item.
+//   - Closing in flushes any pending partial batch, then closes out.
+//
+// Aggregation runs in its own goroutine and hands batches over an unbuffered
+// channel. That separation is load-bearing: it lets the next batch accumulate
+// while the current one is being processed. Merging the two stages would make the
+// effective flush interval max(interval, processor duration) and change latency
+// for every caller, which is a later phase's decision, not this one's.
+func aggregate[T any](in <-chan T, n int, interval time.Duration) <-chan []T {
+	out := make(chan []T)
+
+	go func() {
+		defer close(out)
+
+		var (
+			batch []T
+			timer *time.Timer
+			// timerC stays nil while the batch is empty, disabling that select arm
+			// rather than relying on a stopped timer never firing.
+			timerC <-chan time.Time
+		)
+
+		stopTimer := func() {
+			timerC = nil
+
+			if timer == nil {
+				return
+			}
+
+			if !timer.Stop() {
+				// Drain a tick that fired while we were emitting, so the next batch
+				// cannot inherit a stale expiry.
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+
+			items := batch
+			batch = nil
+
+			stopTimer()
+
+			out <- items
+		}
+
+		for {
+			select {
+			case item, ok := <-in:
+				if !ok {
+					flush()
+
+					return
+				}
+
+				if len(batch) == 0 {
+					batch = make([]T, 0, n)
+
+					if timer == nil {
+						timer = time.NewTimer(interval)
+					} else {
+						timer.Reset(interval)
+					}
+
+					timerC = timer.C
+				}
+
+				batch = append(batch, item)
+
+				if len(batch) >= n {
+					flush()
+				}
+			case <-timerC:
+				flush()
+			}
+		}
+	}()
+
+	return out
 }
 
 func (b *Batcher[T]) Start() {
@@ -78,7 +203,7 @@ func (b *Batcher[T]) Config() *Config[T] {
 }
 
 func (b *Batcher[T]) Add(item T) {
-	b.batchInputChan.In() <- rill.Try[T]{Value: item}
+	b.batchInputChan.In() <- item
 	b.itemCount.Add(1)
 }
 
@@ -102,17 +227,25 @@ func (b *Batcher[T]) Join(timeout time.Duration) error {
 	}
 }
 
+// startProcessing consumes aggregated batches and invokes the processor for each
+// one.
+//
+// Teardown order matters and is preserved from the previous implementation:
+//
+//  1. close the input queue, so aggregation sees end-of-input and flushes its
+//     pending partial batch;
+//  2. drain the batch channel, so the aggregation goroutine can exit rather than
+//     blocking forever on an unbuffered send;
+//  3. close the errors channel last, once no further error can be published.
+//
+// Batches drained during step 2 after a shutdown signal are discarded without
+// being processed. That is existing behaviour, and it is the data-loss path a
+// later milestone replaces; this commit does not change it.
 func (b *Batcher[T]) startProcessing() {
-	// Close channels in the correct order to prevent goroutine leaks:
-	// 1. First close the input channel to stop the rill pipeline from producing more batches
-	// 2. Then drain the output channel to allow rill goroutines to exit cleanly
-	// 3. Finally close the errors channel
 	defer b.errorsChan.Close()
 	defer func() {
-		// Drain any remaining batches from the rill pipeline to ensure
-		// all rill goroutines can exit cleanly. This prevents goroutine leaks.
 		for range b.batchesChan {
-			// Just drain, don't process during shutdown
+			// Drain without processing so aggregation can finish and exit.
 		}
 	}()
 	defer b.batchInputChan.Close()
@@ -121,23 +254,18 @@ func (b *Batcher[T]) startProcessing() {
 		select {
 		case <-b.doneChan:
 			return
-		case batch, ok := <-b.batchesChan:
+		case items, ok := <-b.batchesChan:
 			if !ok {
-				// Channel closed, exit gracefully
 				return
 			}
 
-			if batch.Error != nil {
-				b.errorsChan.In() <- batch.Error
-
-				continue
-			}
-
-			if err := b.config.ProcessorFunc(batch.Value); err != nil {
+			if err := b.config.ProcessorFunc(items); err != nil {
 				b.errorsChan.In() <- err
 			}
 
-			b.itemCount.Add(int64(-len(batch.Value)))
+			// Errored batches still count as completed work, so Join cannot hang on
+			// a processor that always fails. Retry policy belongs to the caller.
+			b.itemCount.Add(int64(-len(items)))
 		}
 	}
 }
