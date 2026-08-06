@@ -27,7 +27,9 @@ func WithProcessor[T any](fn Processor[T]) Option[T] {
 	}
 }
 
-// WithBatchSize sets the batch size.
+// WithBatchSize sets how many items a batch holds before it is flushed immediately.
+//
+// A non-positive value falls back to DefaultBatchSize.
 func WithBatchSize[T any](batchSize int) Option[T] {
 	return func(b *Batcher[T]) {
 		if b.configFrozen.Load() {
@@ -35,14 +37,20 @@ func WithBatchSize[T any](batchSize int) Option[T] {
 		}
 
 		if batchSize <= 0 {
-			batchSize = 1000
+			batchSize = DefaultBatchSize
 		}
 
 		b.config.BatchSize = batchSize
 	}
 }
 
-// WithBatchInterval sets the batch interval.
+// WithBatchInterval sets the maximum age of a partial batch.
+//
+// The timer starts when the first item enters an empty batch, so this is a per-item
+// worst-case wait for sparse traffic rather than a periodic flush tick. Expected
+// batch size is approximately arrival rate x interval.
+//
+// A non-positive value falls back to DefaultBatchInterval.
 func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 	return func(b *Batcher[T]) {
 		if b.configFrozen.Load() {
@@ -50,7 +58,7 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 		}
 
 		if batchInterval <= 0 {
-			batchInterval = 1 * time.Second
+			batchInterval = DefaultBatchInterval
 		}
 
 		b.config.BatchInterval = batchInterval

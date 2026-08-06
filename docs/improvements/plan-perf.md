@@ -1206,6 +1206,9 @@ valid stopping point:
   are 2 with none leaked.
 - Stopping after **3.x**: small windows are honoured under slow processors.
 - Stopping after **4.x**: operators can see overload developing.
+- Stopping after **5.x**: the compatibility story is published, the tuning guidance
+  is measured rather than asserted, and `DefaultBatchInterval` is 10ms on the
+  evidence recorded in `default-window.md`.
 
 ## Conclusion
 

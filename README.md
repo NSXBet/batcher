@@ -28,8 +28,8 @@ type BatchItem struct {
 func main() {
     // create a batcher
     batcher := batcher.New[*BatchItem](
-        batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
-        batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
+        batcher.WithBatchSize[*BatchItem](100),                       // flush at 100 items,
+        batcher.WithBatchInterval[*BatchItem](10*time.Millisecond),   // or when the oldest item is 10ms old.
         // then run this processor with each batch
         batcher.WithProcessor(func(items []*BatchItem) error {
             fmt.Printf("processing batch with %d items...\n", len(items))
@@ -83,8 +83,8 @@ To create a batcher you can use the `New` function:
 
 ```go
 batcher := batcher.New[*BatchItem](
-    batcher.WithBatchSize[*BatchItem](100),                 // will batch each 100 items.
-    batcher.WithBatchInterval[*BatchItem](1*time.Second),   // or each second.
+    batcher.WithBatchSize[*BatchItem](100),                       // flush at 100 items,
+    batcher.WithBatchInterval[*BatchItem](10*time.Millisecond),   // or when the oldest item is 10ms old.
     // then run this processor with each batch
     batcher.WithProcessor(func(items []*BatchItem) error {
         fmt.Printf("processing batch with %d items...\n", len(items))
@@ -344,9 +344,60 @@ fmt.Printf("batcher has %d items\n", batcher.Len())
 
 ## Available Options to configure batcher
 
-- `WithBatchSize[*BatchItem](size int)`: sets the batch size.
-- `WithBatchInterval[*BatchItem](interval time.Duration)`: sets the batch interval.
-- `WithProcessor(func(items []*BatchItem) error)`: sets the processor function.
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `WithProcessor(fn)` | no-op | The function called with each batch. |
+| `WithBatchSize[T](n)` | 1000 | Flush as soon as a batch holds `n` items. |
+| `WithBatchInterval[T](d)` | **10ms** | Maximum age of a partial batch. See [Choosing a batch interval](#choosing-a-batch-interval). |
+| `WithMaxQueueSize[T](n)` | unbounded | Bound queued items to get back-pressure instead of unbounded growth. |
+| `WithConcurrency[T](n)` | 1 | Process `n` batches at once. Requires `WithoutOrderedProcessing`. |
+| `WithoutOrderedProcessing[T]()` | off | Acknowledges that `n > 1` gives up cross-batch ordering and processor mutual exclusion. |
+| `WithCloseGrace[T](d)` | 30s | How long `Close` waits before reporting an incomplete drain. |
+| `WithErrorBufferSize[T](n)` | 1024 | How many diagnostics `Errors()` buffers before dropping newer ones. |
+| `WithSkipAutoStart[T]()` | off | Do not start processing in `New`; call `Start` yourself. |
+
+## Choosing a batch interval
+
+The interval is the **maximum age of a partial batch**, not a periodic flush tick:
+the timer starts when the first item enters an empty batch. Sparse traffic therefore
+waits the full interval per item, and a request crossing several batching services
+pays up to one interval per hop.
+
+Expected batch size is approximately **arrival rate x interval**. That rule is
+measured, not estimated: at 10,000 items/s with a 10ms interval it predicts 100 items
+per batch, and the measured mean is 100.
+
+Use it to pick an interval from the coalescing you actually need:
+
+| Arrival rate | 10ms (default) | 100ms |
+| --- | --- | --- |
+| 1,000/s | ~11 items/batch, ~94 calls/s, p99 ~12ms | ~100 items/batch, ~10 calls/s, p99 ~100ms |
+| 10,000/s | ~101 items/batch, ~99 calls/s, p99 ~10ms | ~1000 items/batch, ~10 calls/s, p99 ~99ms |
+| 50,000/s | ~500 items/batch, ~100 calls/s, p99 ~10ms | ~1000 items/batch, ~50 calls/s, p99 ~20ms |
+
+Raise the interval when your downstream is expensive enough that the call rate at
+10ms is unacceptable — most relevant below a few thousand items/s. The full matrix
+and the reasoning behind the default are in
+[`docs/improvements/default-window.md`](./docs/improvements/default-window.md).
+
+**Shrinking the interval is not overload protection.** Measured with a saturated
+downstream, every interval from 10ms to 1s accepted the same offered load while
+completing the same amount, with the queue absorbing the difference. Use
+`WithMaxQueueSize` and `Enqueue` for that, or upstream flow control.
+
+**A slow processor bounds the effective interval.** At the default `Concurrency` of 1,
+one batch must finish before the next starts, so the effective interval is
+`max(BatchInterval, processor duration)`. Measured with a 50ms processor at 10k
+items/s:
+
+| Configured interval | Effective behaviour | p50 latency |
+| --- | --- | --- |
+| 5ms | bounded by the 50ms processor | **120ms** |
+| 100ms | bounded by the interval | **100ms** |
+
+The smaller interval is *worse*, because queueing dominates. If your processor is
+slow, raise `WithConcurrency` (with `WithoutOrderedProcessing`) rather than lowering
+the interval — with 8 workers the same scenario measured p50 4ms.
 
 ## FX Integration
 
@@ -430,6 +481,39 @@ func main() {
     app.Run()
 }
 ```
+
+### Configuring the Fx batcher beyond size and interval
+
+`ProvideBatcherInFX` takes batch size and interval positionally, which covers most
+applications. For anything else — bounded queues, worker concurrency, close grace,
+diagnostics buffer — use `ProvideBatcherInFXWithOptions`, which accepts the same
+options as `New`:
+
+```go
+batcher.ProvideBatcherInFXWithOptions[*BatchItem](
+    func(processor *Processor) batcher.Processor[*BatchItem] {
+        return processor.Process
+    },
+    batcher.WithBatchSize[*BatchItem](500),
+    batcher.WithBatchInterval[*BatchItem](10*time.Millisecond),
+    batcher.WithMaxQueueSize[*BatchItem](10_000),
+    batcher.WithConcurrency[*BatchItem](4),
+    batcher.WithoutOrderedProcessing[*BatchItem](),
+)
+```
+
+Do not pass `WithProcessor` here: the processor comes from the injected factory, and
+supplying it as an option would bypass dependency injection.
+
+Both variants forward the Fx stop-hook context to `Shutdown`, so your application's
+shutdown deadline governs the drain:
+
+| Case | Result |
+| --- | --- |
+| Normal drain | `nil` |
+| Stop context expires | `*ShutdownIncompleteError` as an Fx lifecycle error; the drain continues in the background |
+| Batcher holds queued work but never started | Drains anyway |
+| Repeated stop | Idempotent |
 
 The key part of the FX integration is the processor function passed to `ProvideBatcherInFX`. This function is an FX resolver that:
 
