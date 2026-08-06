@@ -1,114 +1,92 @@
 ---
+# Build, unit tests, coverage, vet, and formatting.
+#
+# This workflow intentionally uses only first-party actions/* steps and plain Go
+# commands. The prior Go workflow has been failing at startup on main since
+# 2026-04-22, before any job is created. Its YAML validates and every referenced
+# action resolves, pointing at a repository or organisation Actions policy issue
+# around its third-party actions (super-linter, go-test-report, go-coverage-action,
+# codeclimate-action), not a code failure. Replacing it in place restores the build,
+# unit-test, coverage, lint and formatting checks pull requests are meant to have.
+#
+# Do not filter pull_request by base branch. Stacked PRs target the layer below
+# rather than main; a `branches: [main]` filter skips every layer above the bottom.
 name: Go
 on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
-permissions: read-all
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   build:
-    permissions:
-      contents: read
-      packages: read
-      # To report GitHub Actions status checks
-      statuses: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v6
-      - name: Build
-        run: go build -v ./...
-  test:
-    permissions:
-      contents: read
-      packages: read
-      # To report GitHub Actions status checks
-      statuses: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v6
-      - uses: brian-pickens/go-test-report@v1
-        with:
-          packages: "./..."
-          summary: "true"
-  coverage:
-    permissions:
-      contents: write
-      checks: write
-      issues: write
-      pull-requests: write
-      # To report GitHub Actions status checks
-      statuses: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v6
-      - name: Set up Node.js (for coverage)
-        uses: actions/setup-node@master
-        with:
-          node-version: "12"
-      - name: setup tsc
-        run: npm install -g typescript
-      - name: Gather dependencies
-        run: go mod download
-      - uses: gwatts/go-coverage-action@v2
-        id: coverage
-        with:
-          coverage-threshold: 80
-          cover-pkg: ./...
-          ignore-pattern: |
-            \.pb\.go$
-            \_string\.go$
-            \main\.go$
-            (^|/)internal/test/.*$
-            (^|/)test/.*$
-      - name: Generate coverage tree map
-        run: |
-          go run github.com/nikolaydubina/go-cover-treemap@latest \
-          -coverprofile ${{ steps.coverage.outputs.gocov-agg-pathname }} \
-          -only-folders=true >/tmp/treemap.svg
-      - uses: paambaati/codeclimate-action@v6.0.0
-        env:
-          CC_TEST_REPORTER_ID: ${{ secrets.CODECLIMATE_TOKEN }}
-        with:
-          coverageCommand: make coverage-report-ci
-          prefix: github.com/NSXBet/batcher
-          coverageLocations: |
-            ${{github.workspace}}/coverage.txt:gocov
-  lint:
-    permissions:
-      contents: read
-      packages: read
-      # To report GitHub Actions status checks
-      statuses: write
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      - name: Super-linter
-        uses: nsx-actions/super-linter_super-linter@v6.6.0
-        env:
-          # To report GitHub Actions status checks
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VALIDATE_GO: false
-          VALIDATE_JSCPD: false
-  go-action-detection:
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: "Checkout Repository"
-        uses: actions/checkout@v4
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
-          go-version: ">=1.22.0"
-      - name: Run snapshot action
-        uses: actions/go-dependency-submission@v2
+          go-version-file: go.mod
+      - run: go build -v ./...
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          go-mod-path: go.mod
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Run tests
+        run: go test -v ./...
+  vet:
+    name: Vet and formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l pkg internal test)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Measure coverage
+        # The scenario harness under test/ is measurement infrastructure, not
+        # shipped code, so it is excluded from the enforced number for the same
+        # reason internal/test is.
+        run: |
+          go test -coverprofile=coverage.out ./...
+          grep -v '/test/' coverage.out > coverage-filtered.out
+          go tool cover -func=coverage-filtered.out | tail -1
+      - name: Enforce threshold
+        run: |
+          threshold=80
+          total="$(go tool cover -func=coverage-filtered.out \
+            | tail -1 | awk '{print $3}' | tr -d '%')"
+          echo "shipped-code coverage: ${total}% (threshold ${threshold}%)"
+          awk -v t="$threshold" -v c="$total" \
+            'BEGIN { exit (c + 0 >= t + 0) ? 0 : 1 }' \
+            || { echo "coverage ${total}% is below ${threshold}%"; exit 1; }
