@@ -58,14 +58,25 @@ one named exemption.
 
 Compare with `benchstat` over `-count=10`. A single run is not evidence. This is advisory until a scheduled run stores an ubuntu-latest/amd64 baseline; the current workflow uploads raw input but intentionally does not fail on this threshold.
 
-## Goroutine gates (blocking, from Phase 2 onward)
+## Goroutine gates (blocking)
 
-| Gate                                | Threshold                          |
-| ----------------------------------- | ---------------------------------- |
-| Goroutines per idle batcher         | exactly 0                          |
-| Goroutines per running `n=1`        | exactly 1 (aggregator)             |
-| Goroutines per running `n>1`        | exactly 1 + n                      |
-| Goroutines after terminal `closed`  | equal to pre-construction baseline |
+These are the gates in force today. They must agree with the allocation table
+above, which enforces the same running-batcher count.
+
+| Gate                               | Threshold                                 |
+| ---------------------------------- | ----------------------------------------- |
+| Goroutines per unstarted batcher   | exactly 0                                 |
+| Goroutines per running batcher     | exactly 2 (aggregator + serial processor) |
+| Goroutines after terminal `closed` | equal to pre-construction baseline        |
+
+Enforced by `TestGoroutineBudgetPerRunningBatcher`.
+
+Phase 3 introduces explicit worker concurrency and will replace the single
+running-batcher row with `1 + n` (aggregator plus workers). That row is
+deliberately absent here rather than stated as a gate, because a threshold for a
+configuration this code cannot express is not enforceable — and two rows claiming
+different counts for the same batcher is worse than one row that is merely
+incomplete.
 
 Current `main` owns 6 goroutines per batcher. Phase 2.1 removed `rill`
 (**measured 6 → 5**) and Phase 2.2 removed both `chann` relays and the input
@@ -82,8 +93,11 @@ The 6 → 5 figure supersedes earlier 6 → 3 and 6 → 4 estimates. Fewer gorou
 were unreachable without changing observable behaviour: merging aggregation into
 the processing loop inverted the documented latency baseline, and merging input
 draining into aggregation regressed sequential `Add` by 39-50% because the
-`chann` relay's bounded ingress was not drained promptly. The "exactly 1" row
-above applies only from Phase 3, once the worker model is owned.
+`chann` relay's bounded ingress was not drained promptly.
+
+Both earlier estimates assumed aggregation and processing could share one
+goroutine. They cannot without changing observable latency, which is why the
+enforced count is 2 rather than 1.
 
 ## Conditional gates (Milestone 4.2 only)
 

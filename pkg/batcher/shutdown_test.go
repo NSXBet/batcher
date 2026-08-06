@@ -235,7 +235,9 @@ func TestShutdownWithParkedPublisherOnFullBoundedQueue(t *testing.T) {
 		close(release)
 
 		select {
-		case <-shutdownDone:
+		case err := <-shutdownDone:
+			require.NoError(t, err,
+				"trial %d: the drain must complete, not merely return", trial)
 		case <-time.After(10 * time.Second):
 			t.Fatalf("trial %d: shutdown deadlocked with a parked publisher", trial)
 		}

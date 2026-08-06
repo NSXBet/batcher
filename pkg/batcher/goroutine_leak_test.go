@@ -325,7 +325,16 @@ func TestBatcher_CloseTimeoutBehavior(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
+	// Signalled by the processor itself. Waiting on Stats().Pending would only prove
+	// work is pending, not that the processor has been entered, so Close could race
+	// ahead of processing and the in-flight case would go uncovered.
+	entered := make(chan struct{})
+
+	var enterOnce sync.Once
+
 	processor := func(items []string) error {
+		enterOnce.Do(func() { close(entered) })
+
 		<-release
 
 		return nil
@@ -345,9 +354,11 @@ func TestBatcher_CloseTimeoutBehavior(t *testing.T) {
 	}
 
 	// Wait for the processor to be entered, so the batch really is in flight.
-	require.Eventually(t, func() bool {
-		return b.Stats().Pending > 0
-	}, 5*time.Second, 10*time.Millisecond)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the processor was never entered")
+	}
 
 	closeStart := time.Now()
 	closeDone := make(chan error, 1)

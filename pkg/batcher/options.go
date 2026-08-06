@@ -73,8 +73,12 @@ func WithCloseGrace[T any](grace time.Duration) Option[T] {
 	}
 }
 
-// WithErrorBufferSize sets how many diagnostics are retained before the oldest
-// retained errors are kept and newer ones dropped.
+// WithErrorBufferSize sets how many diagnostics the Errors() channel buffers.
+//
+// When the buffer is full, already-retained errors are kept and newer ones are
+// dropped. Keeping the oldest is deliberate: the first errors of a storm usually
+// carry the root cause, and dropping the oldest instead would mean racing the
+// consumer for the right to discard.
 //
 // The buffer is bounded on purpose. A blocking error channel would deadlock the
 // pipeline whenever a processor fails and nobody reads Errors(), and an unbounded

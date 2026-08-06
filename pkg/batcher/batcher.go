@@ -474,6 +474,15 @@ func (b *Batcher[T]) Shutdown(ctx context.Context) error {
 		go b.coordinateDrain()
 	})
 
+	// A completed drain wins over an expired context. A select chooses randomly
+	// when both cases are ready; reporting ShutdownIncompleteError with Pending=0
+	// for a batcher that is already closed would be false.
+	select {
+	case <-b.shutdownDone:
+		return nil
+	default:
+	}
+
 	select {
 	case <-b.shutdownDone:
 		return nil

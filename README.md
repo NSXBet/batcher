@@ -39,8 +39,12 @@ func main() {
             return nil
         }),
     )
-    // stop the batcher
-    defer batcher.Close()
+    // stop the batcher, and report if the drain did not finish in time
+    defer func() {
+        if err := batcher.Close(); err != nil {
+            fmt.Printf("shutdown incomplete: %v\n", err)
+        }
+    }()
 
     // add operations to the batcher
     for i := 0; i < 1000; i++ {
@@ -174,7 +178,14 @@ if err := batcher.Join(timeout); err != nil {
 To stop the batcher, use `Close`:
 
 ```go
-defer batcher.Close()
+defer func() {
+    if err := batcher.Close(); err != nil {
+        // The drain did not finish within the grace period. Work is still being
+        // processed in the background, so decide deliberately: wait longer with
+        // Shutdown, or accept that the process is about to exit with work pending.
+        log.Printf("batcher shutdown incomplete: %v", err)
+    }
+}()
 
 // batcher.IsClosed() == true once the drain has completed
 ```
@@ -185,6 +196,8 @@ multiple times and from multiple goroutines.
 
 If the grace period expires, `Close` reports that the drain is incomplete — it does
 **not** discard the remaining work, which keeps being processed in the background.
+Do not write a bare `defer batcher.Close()`: it discards that report, and if the
+process exits immediately afterwards, accepted work is lost without any signal.
 
 When you need to control the wait, or to keep waiting after a timeout, use
 `Shutdown`:
@@ -218,7 +231,7 @@ an item was refused:
 
 ```go
 b := batcher.New(
-    batcher.WithProcessor(processor),
+    batcher.WithProcessor(processor.Process),
     batcher.WithMaxQueueSize[Item](10_000),
 )
 

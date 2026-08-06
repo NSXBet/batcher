@@ -5,8 +5,14 @@ import "sync/atomic"
 // Stats is a point-in-time snapshot of a Batcher's counters.
 //
 // Reading it is O(1) and allocation-free: it loads a fixed set of atomics and
-// never takes a lock, reads a channel, or walks the queue. That is deliberate, so
-// metrics scraping can run as often as needed without perturbing batching.
+// never reads a channel or walks the queue.
+//
+// One field is not lock-free. Queued is read from the queue itself, which takes
+// the queue's mutex for the duration of a single length check, so a scrape costs
+// about the same contention as one push or pop. That is a deliberate trade:
+// maintaining Queued as an atomic would add a fourth producer-path RMW to every
+// enqueue, and measurement showed contended producer atomics dominate enqueue
+// cost. Scraping frequently is fine; scraping in a tight loop is not.
 //
 // The snapshot is eventually consistent, NOT transactional. Fields are individual
 // atomic loads, so a state transition in flight can be observed partially. Two
