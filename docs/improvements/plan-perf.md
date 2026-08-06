@@ -1080,8 +1080,10 @@ rather than intuition.
   sealing instead of panicking; `Close()` no longer abandoning the drain at its
   deadline; **`Len()` now counting accepted-but-unfinished work including
   in-flight batches, so it can be non-zero with an empty queue**; `Join`'s
-  clarified quiescence-snapshot contract; the removal of the `rill` and `chann`
-  dependencies; **the module's minimum Go version moving from 1.22.4 to 1.25.0**
+  clarified quiescence-snapshot contract; **`Config()` returning a value snapshot
+  instead of a live mutable pointer**, which removes the ability to reconfigure a
+  running batcher and the data race that came with it; the removal of the `rill` and
+  `chann` dependencies; **the module's minimum Go version moving from 1.22.4 to 1.25.0**
   (required by `golang.org/x/sys` v0.46.0, pulled in when dependencies were
   modernised in 2.1); and any `ProvideBatcherInFX` signature change.
 - **`Config()` must stop exposing live mutable state.** It currently returns the

@@ -107,10 +107,30 @@ zero leaked.
 
 ## Conditional gates (Milestone 4.2 only)
 
-| Gate                                       | Threshold                    |
-| ------------------------------------------ | ---------------------------- |
-| Sparse-window allocated bytes/flush        | > 2 KB/flush to justify work |
-| Allocation regression ceiling, any scenario | ≤ +2% allocated bytes        |
+| Gate                                        | Threshold                    | Measured        |
+| ------------------------------------------- | ---------------------------- | --------------- |
+| Sparse-window allocated bytes/flush         | > 2 KB/flush to justify work | 55,944 B/flush  |
+| Allocation regression ceiling, any scenario | ≤ +2% allocated bytes        | +1.12% (worst)  |
+
+Milestone 4.2 was **triggered and implemented**. Sparse-window waste measured far
+above the justification threshold: at a 1ms window with `BatchSize=1000` the
+aggregator reserved 55,944 B/flush to hold a single item, and 559,944 B/flush at
+`BatchSize=10000`.
+
+Results per workload, adaptive versus the previous full-capacity strategy:
+
+| Workload                | Change  |
+| ----------------------- | ------- |
+| steady sparse           | -97.9%  |
+| small batches           | -93.3%  |
+| full batches (control)  | -0.00%  |
+| alternating sparse/full | +1.12%  |
+| burst after idle        | -72.2%  |
+| bimodal                 | -3.45%  |
+
+The alternating case is the one that killed the rejected EWMA estimator, which
+allocated *more* than doing nothing there. Recent-max keeps it inside the +2%
+budget. Enforced by `BenchmarkCapacity*` and `capacity_test.go`.
 
 The second gate must hold for alternating sparse/full, burst-after-idle, and
 bimodal workloads, not just the sparse case the optimisation targets. An

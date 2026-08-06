@@ -138,9 +138,17 @@ func (b *Batcher[T]) Start() {
 	})
 }
 
-// Config returns the batcher's configuration.
-func (b *Batcher[T]) Config() *Config[T] {
-	return b.config
+// Config returns a copy of the batcher's configuration.
+//
+// It is a snapshot, not a handle. Returning the live pointer let a caller mutate a
+// running batcher's batch size, interval or processor from another goroutine, which
+// is a data race against the aggregation loop and could change batching semantics
+// mid-batch. Options are meant to be applied at construction; mutating them
+// afterwards was never coherent, so this closes the hole rather than documenting it.
+//
+// Callers that need to change configuration should construct a new Batcher.
+func (b *Batcher[T]) Config() Config[T] {
+	return *b.config
 }
 
 // Add enqueues an item. It is the compatibility fast path and returns no error.
@@ -296,12 +304,27 @@ func (b *Batcher[T]) Errors() <-chan error {
 func (b *Batcher[T]) run() {
 	defer close(b.stopped)
 
-	batches := make(chan []T)
+	// Snapshot the configuration once, at start, and use only the snapshot from here
+	// on. Config is a plain struct the caller still holds a pointer to, so reading it
+	// per batch races with any option applied after Start. Freezing it also matches
+	// the semantics callers already rely on: batch size and interval are fixed for
+	// the lifetime of a running batcher, so re-reading them could never have taken
+	// effect coherently mid-batch anyway.
+	var (
+		batchSize     = b.config.BatchSize
+		batchInterval = b.config.BatchInterval
+		workers       = b.config.Concurrency
+	)
 
-	workers := b.config.Concurrency
+	if batchSize < 1 {
+		batchSize = DefaultBatchSize
+	}
+
 	if workers < 1 {
 		workers = 1
 	}
+
+	batches := make(chan []T)
 
 	var processing sync.WaitGroup
 
@@ -326,9 +349,10 @@ func (b *Batcher[T]) run() {
 	}()
 
 	var (
-		batch  []T
-		timer  *time.Timer
-		timerC <-chan time.Time
+		batch      []T
+		timer      *time.Timer
+		timerC     <-chan time.Time
+		capacities = newCapacityEstimator(batchSize)
 	)
 
 	stopTimer := func() {
@@ -365,16 +389,21 @@ func (b *Batcher[T]) run() {
 		batches <- items
 
 		b.counters.dispatched(len(items))
+		capacities.observe(len(items))
 	}
 
 	take := func(item T) {
 		if len(batch) == 0 {
-			batch = make([]T, 0, b.config.BatchSize)
+			// The capacity estimator is owned by this aggregation goroutine. It
+			// reduces timer-flush allocation pressure without pooling or reusing a
+			// slice after the processor receives it, so callers may still retain the
+			// batch slice exactly as before.
+			batch = make([]T, 0, capacities.capacity())
 
 			if timer == nil {
-				timer = time.NewTimer(b.config.BatchInterval)
+				timer = time.NewTimer(batchInterval)
 			} else {
-				timer.Reset(b.config.BatchInterval)
+				timer.Reset(batchInterval)
 			}
 
 			timerC = timer.C
@@ -382,7 +411,7 @@ func (b *Batcher[T]) run() {
 
 		batch = append(batch, item)
 
-		if len(batch) >= b.config.BatchSize {
+		if len(batch) >= batchSize {
 			flush()
 		}
 	}
