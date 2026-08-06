@@ -12,9 +12,17 @@ reported by the scenario matrix and compared as a trend; it never fails a PR.
 
 Thresholds are keyed to the environment. Re-baseline when any of these change.
 
+The Go version is whatever `go.mod` declares: CI resolves it with
+`go-version-file: go.mod` rather than a hardcoded string, so this row and the
+toolchain cannot drift apart. Phase 2 raised the floor from 1.22.4 to 1.25.0 when
+`golang.org/x/sys` was updated.
+
+Stored baselines record the toolchain they were captured on in their own header,
+which is what makes them comparable or not; see Baselines below.
+
 | Field      | Value                                    |
 | ---------- | ---------------------------------------- |
-| Go version | 1.22.4                                   |
+| Go version | 1.25.0 (from `go.mod`)                   |
 | Runner     | `ubuntu-latest` (GitHub-hosted, mutable) |
 | Arch       | `amd64`                                  |
 

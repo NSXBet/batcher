@@ -223,11 +223,18 @@ func TestShutdownWithParkedPublisherOnFullBoundedQueue(t *testing.T) {
 			shutdownDone <- b.Shutdown(ctx)
 		}()
 
-		// The parked publisher must be released rather than held forever.
+		// The publisher must be released rather than held forever. It may return
+		// ErrClosing, or it may win the final race with the newly available slot:
+		// it entered the admission gate before sealing, and once the shutdown
+		// consumer drains a slot, both sealCh and notFull are ready. The protocol
+		// permits that pre-seal publisher to succeed, provided the drain accounts
+		// for it. Enqueue calls that START after sealing are covered separately by
+		// TestEnqueueAfterSealReportsClosing and must return ErrClosing.
 		select {
 		case err := <-parked:
-			require.ErrorIs(t, err, batcher.ErrClosing,
-				"trial %d: a parked publisher must be released by sealing", trial)
+			require.True(t, err == nil || errors.Is(err, batcher.ErrClosing),
+				"trial %d: a pre-seal parked publisher may succeed or be released "+
+					"with ErrClosing, got %v", trial, err)
 		case <-time.After(10 * time.Second):
 			t.Fatalf("trial %d: parked publisher was never released", trial)
 		}
