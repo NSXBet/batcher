@@ -171,15 +171,79 @@ if err := batcher.Join(timeout); err != nil {
 
 ### Stopping the batcher
 
-To stop the batcher you can use the `StopProcessing` function:
+To stop the batcher, use `Close`:
 
 ```go
 defer batcher.Close()
 
-// batcher.IsClosed() == true after this point
+// batcher.IsClosed() == true once the drain has completed
 ```
 
-This function is safe to be called multiple times as it will only stop the processor once.
+`Close` seals admission and drains work that has already been accepted, waiting up
+to 30 seconds by default (configurable with `WithCloseGrace`). It is safe to call
+multiple times and from multiple goroutines.
+
+If the grace period expires, `Close` reports that the drain is incomplete — it does
+**not** discard the remaining work, which keeps being processed in the background.
+
+When you need to control the wait, or to keep waiting after a timeout, use
+`Shutdown`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+if err := batcher.Shutdown(ctx); err != nil {
+    var incomplete *batcher.ShutdownIncompleteError
+    if errors.As(err, &incomplete) {
+        // Still draining. Nothing was lost, and we can wait longer.
+        log.Printf("%d items still pending", incomplete.Pending)
+
+        err = batcher.Shutdown(context.Background())
+    }
+}
+```
+
+`Shutdown` is resumable: a later call waits on the same drain rather than starting
+a new one, so an expired deadline never costs you accepted work.
+
+### Back-pressure and rejection
+
+By default the queue is unbounded, which absorbs bursts well but turns a sustained
+overload into unbounded memory growth. Note that shrinking the batch interval does
+**not** bound queued work — only bounding the queue does.
+
+To get back-pressure instead, bound the queue and use `Enqueue`, which reports why
+an item was refused:
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(processor),
+    batcher.WithMaxQueueSize[Item](10_000),
+)
+
+if err := b.Enqueue(ctx, item); err != nil {
+    // batcher.ErrClosing  -> shutting down
+    // ctx.Err()           -> queue full and the caller's deadline expired
+    return err
+}
+```
+
+`Add` remains available as the fast path for best-effort use: it returns no error,
+and after shutdown it is a counted no-op rather than a panic.
+
+### Observing a batcher
+
+`Stats` returns an allocation-free snapshot suitable for frequent scraping:
+
+```go
+s := b.Stats()
+
+// s.Queued        -> queue depth; the value to alert on
+// s.Pending       -> accepted work not yet finished, including in-flight batches
+// s.Rejected      -> refused enqueues
+// s.DroppedErrors -> diagnostics lost because Errors() was not drained
+```
 
 ### Handling Errors
 
