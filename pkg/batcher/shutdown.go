@@ -53,3 +53,23 @@ func (e *ShutdownIncompleteError) Unwrap() error {
 func (e *ShutdownIncompleteError) Is(target error) bool {
 	return errors.Is(target, ErrTimeout)
 }
+
+// ProcessorPanicError reports that a processor panicked and the panic was
+// recovered.
+//
+// Batcher recovers processor panics because it owns goroutines the caller cannot
+// reach: an unrecovered panic there would crash the whole process and discard every
+// other queued item, and the caller has no way to install its own recover. The
+// panic value and stack are preserved so the bug remains debuggable rather than
+// being silently swallowed.
+type ProcessorPanicError struct {
+	// Value is whatever was passed to panic().
+	Value any
+
+	// Stack is the stack trace captured at recovery.
+	Stack []byte
+}
+
+func (e *ProcessorPanicError) Error() string {
+	return fmt.Sprintf("batcher processor panicked: %v", e.Value)
+}

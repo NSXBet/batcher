@@ -3,6 +3,7 @@ package batcher
 import (
 	"context"
 	"errors"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -22,13 +23,14 @@ func NoOpProcessor[T any]([]T) error {
 }
 
 type Config[T any] struct {
-	SkipAutoStart bool
-	BatchSize     int
-	BatchInterval time.Duration
-	Concurrency   int
-	MaxQueueSize  int
-	CloseGrace    time.Duration
-	ProcessorFunc Processor[T]
+	SkipAutoStart   bool
+	BatchSize       int
+	BatchInterval   time.Duration
+	Concurrency     int
+	MaxQueueSize    int
+	CloseGrace      time.Duration
+	ErrorBufferSize int
+	ProcessorFunc   Processor[T]
 }
 
 type Batcher[T any] struct {
@@ -66,11 +68,12 @@ type Batcher[T any] struct {
 func New[T any](options ...Option[T]) *Batcher[T] {
 	b := &Batcher[T]{
 		config: &Config[T]{
-			BatchSize:     DefaultBatchSize,
-			BatchInterval: DefaultBatchInterval,
-			Concurrency:   DefaultConcurrency,
-			CloseGrace:    DefaultCloseGrace,
-			ProcessorFunc: NoOpProcessor[T],
+			BatchSize:       DefaultBatchSize,
+			BatchInterval:   DefaultBatchInterval,
+			Concurrency:     DefaultConcurrency,
+			CloseGrace:      DefaultCloseGrace,
+			ErrorBufferSize: DefaultErrorBufferSize,
+			ProcessorFunc:   NoOpProcessor[T],
 		},
 
 		gate:         newAdmissionGate(),
@@ -84,7 +87,7 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	}
 
 	b.input = newQueue[T](b.config.MaxQueueSize)
-	b.errorsChan = make(chan error, DefaultErrorBufferSize)
+	b.errorsChan = make(chan error, b.config.ErrorBufferSize)
 
 	if !b.config.SkipAutoStart {
 		b.Start()
@@ -199,6 +202,7 @@ func (b *Batcher[T]) Stats() Stats {
 		Failed:           b.counters.failed.Load(),
 		Panicked:         b.counters.panicked.Load(),
 		Rejected:         b.counters.rejected.Load(),
+		DroppedErrors:    b.counters.droppedErrors.Load(),
 	}
 }
 
@@ -360,28 +364,59 @@ func (b *Batcher[T]) run() {
 
 // process invokes the processor for one batch and records exactly one terminal
 // outcome for it.
+//
+// A panic in the processor is recovered and scoped to the batch. Batcher owns
+// goroutines the caller cannot see, so it must not let a caller's bug become a
+// process-wide crash that also destroys every other queued item: the caller has no
+// way to wrap our goroutine in its own recover. The panic value and stack are
+// reported as a diagnostic so the bug stays debuggable.
+//
+// Recovery is scoped to the batch rather than the loop, so one poison batch cannot
+// silently take the consumer down and stall every later batch.
+//
+// The ordering is fixed and load-bearing: whatever happens, exactly one terminal
+// category is counted and the drain obligation is released exactly once. Leaving it
+// unreleased would inflate Pending permanently and hang shutdown forever.
 func (b *Batcher[T]) process(items []T) {
-	err := b.config.ProcessorFunc(items)
-
 	outcome := outcomeCompleted
 
-	if err != nil {
+	defer func() {
+		b.counters.terminal(outcome, len(items))
+	}()
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+
+		outcome = outcomePanicked
+
+		b.publishError(&ProcessorPanicError{
+			Value: recovered,
+			Stack: debug.Stack(),
+		})
+	}()
+
+	if err := b.config.ProcessorFunc(items); err != nil {
 		outcome = outcomeFailed
 
 		b.publishError(err)
 	}
-
-	// A failed batch still releases its drain obligation: shutdown must not hang
-	// because a processor keeps returning errors. Retry policy belongs to the
-	// caller, which is why the error is reported rather than retried here.
-	b.counters.terminal(outcome, len(items))
 }
 
 // publishError reports a diagnostic without ever blocking the pipeline.
 //
-// Dropping is deliberate. A blocking send with no reader would deadlock a failing
-// pipeline, which is strictly worse than losing a diagnostic, and an error is
-// diagnostic rather than payload. Milestone 2.4 adds the drop counter.
+// Dropping is deliberate, and the alternative is worse. A bounded channel with a
+// blocking send would deadlock the pipeline whenever a processor fails and nobody
+// is reading Errors() — a self-inflicted outage caused by a diagnostic. An
+// unbounded channel would instead grow without limit during an outage, which is
+// exactly when memory is scarcest.
+//
+// Dropping the newest error rather than the oldest keeps the earliest errors of a
+// storm, which usually carry the root cause, and avoids racing the consumer.
+// DroppedErrors makes the loss visible: a non-zero value means "you are not
+// draining Errors() fast enough", which is itself worth alerting on.
 func (b *Batcher[T]) publishError(err error) {
 	select {
 	case b.errorsChan <- err:

@@ -50,6 +50,11 @@ type Stats struct {
 	// bounded queue was full for a non-blocking Add, or the caller's context
 	// expired.
 	Rejected uint64
+
+	// DroppedErrors counts diagnostics discarded because the Errors() buffer was
+	// full. A non-zero value means diagnostics are being lost, not that batches
+	// failed: it is a signal that Errors() is not being drained fast enough.
+	DroppedErrors uint64
 }
 
 // counters holds the live atomics behind Stats.

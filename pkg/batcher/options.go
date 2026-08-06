@@ -72,3 +72,20 @@ func WithCloseGrace[T any](grace time.Duration) Option[T] {
 		b.config.CloseGrace = grace
 	}
 }
+
+// WithErrorBufferSize sets how many diagnostics are retained before the oldest
+// retained errors are kept and newer ones dropped.
+//
+// The buffer is bounded on purpose. A blocking error channel would deadlock the
+// pipeline whenever a processor fails and nobody reads Errors(), and an unbounded
+// one would grow without limit during an outage. Stats().DroppedErrors reports the
+// loss.
+func WithErrorBufferSize[T any](size int) Option[T] {
+	return func(b *Batcher[T]) {
+		if size <= 0 {
+			size = DefaultErrorBufferSize
+		}
+
+		b.config.ErrorBufferSize = size
+	}
+}
