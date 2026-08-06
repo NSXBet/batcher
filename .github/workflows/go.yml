@@ -65,8 +65,8 @@ jobs:
             \.pb\.go$
             \_string\.go$
             \main\.go$
-            \internal\/test\/.*$
-            \test\/.*$
+            (^|/)internal/test/.*$
+            (^|/)test/.*$
       - name: Generate coverage tree map
         run: |
           go run github.com/nikolaydubina/go-cover-treemap@latest \
