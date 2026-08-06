@@ -40,7 +40,7 @@ the blocking signal rather than timings.
 | `Add` allocations, unbounded path       | exactly 0                                    | `TestAddAllocatesNothingPerCall`                              |
 | Recovery wrapper allocations, non-panic | exactly 0                                    | `TestRecoveredPanicAddsNoSteadyStateAllocations`              |
 | Scenario recorder allocations per item  | ≤ 1 total, and must not grow with run length | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
-| Goroutines per running batcher          | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
+| Goroutines per running batcher, `n=1`   | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
 
 `Stats()` is a fixed set of atomic loads returning a value type, so it has no
 allocation gate of its own; the `Add` gate covers the hot path that matters.
@@ -68,23 +68,16 @@ Compare with `benchstat` over `-count=10`. A single run is not evidence. This is
 
 ## Goroutine gates (blocking)
 
-These are the gates in force today. They must agree with the allocation table
-above, which enforces the same running-batcher count.
+These are the gates in force today. The n=1 row agrees with the allocation table
+above; `n>1` is now a real, acknowledged configuration and has its own worker-pool
+gate. Every count is enforced by a test, not merely documented.
 
-| Gate                               | Threshold                                 |
-| ---------------------------------- | ----------------------------------------- |
-| Goroutines per unstarted batcher   | exactly 0                                 |
-| Goroutines per running batcher     | exactly 2 (aggregator + serial processor) |
-| Goroutines after terminal `closed` | equal to pre-construction baseline        |
-
-Enforced by `TestGoroutineBudgetPerRunningBatcher`.
-
-Phase 3 introduces explicit worker concurrency and will replace the single
-running-batcher row with `1 + n` (aggregator plus workers). That row is
-deliberately absent here rather than stated as a gate, because a threshold for a
-configuration this code cannot express is not enforceable — and two rows claiming
-different counts for the same batcher is worse than one row that is merely
-incomplete.
+| Gate                               | Threshold                                 | Enforced by |
+| ---------------------------------- | ----------------------------------------- | ----------- |
+| Goroutines per unstarted batcher   | exactly 0                                 | `TestWorkerGoroutineBudget` |
+| Goroutines per running `n=1`       | exactly 2 (aggregator + serial processor) | `TestGoroutineBudgetPerRunningBatcher`, `TestWorkerGoroutineBudget` |
+| Goroutines per running `n>1`       | exactly 1 + n (aggregator + workers)      | `TestWorkerGoroutineBudget` |
+| Goroutines after terminal `closed` | equal to pre-construction baseline        | `TestGoroutineBudgetPerRunningBatcher`, `TestWorkerGoroutineBudget` |
 
 Current `main` owns 6 goroutines per batcher. Phase 2.1 removed `rill`
 (**measured 6 → 5**) and Phase 2.2 removed both `chann` relays and the input
@@ -105,7 +98,9 @@ draining into aggregation regressed sequential `Add` by 39-50% because the
 
 Both earlier estimates assumed aggregation and processing could share one
 goroutine. They cannot without changing observable latency, which is why the
-enforced count is 2 rather than 1.
+enforced count is 2 at `n=1`. Phase 3 owns the worker model on top of that base:
+`n=1` is 2 goroutines and `n>1` is `1 + n`, measured as n=2→3, n=4→5, n=8→9 with
+zero leaked.
 
 ## Conditional gates (Milestone 4.2 only)
 

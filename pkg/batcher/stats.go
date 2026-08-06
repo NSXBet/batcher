@@ -41,6 +41,11 @@ type Stats struct {
 	// the aggregator. This is the queue depth to alert on.
 	Queued int64
 
+	// InFlight is items currently inside a processor call. It is updated by workers
+	// on batch boundaries, not on the enqueue path, so observability does not add
+	// another contended producer atomic.
+	InFlight int64
+
 	// Accepted counts successful publications. A rejected or cancelled enqueue
 	// never increments it.
 	Accepted uint64
@@ -74,6 +79,7 @@ type counters struct {
 	pending       atomic.Int64
 	intakePending atomic.Int64
 	accepted      atomic.Uint64
+	inFlight      atomic.Int64
 	completed     atomic.Uint64
 	failed        atomic.Uint64
 	panicked      atomic.Uint64

@@ -223,6 +223,7 @@ func (b *Batcher[T]) Stats() Stats {
 		IntakePending:    b.counters.intakePending.Load(),
 		PublishersInGate: b.gate.inGate(),
 		Queued:           int64(b.input.length()),
+		InFlight:         b.counters.inFlight.Load(),
 		Accepted:         b.counters.accepted.Load(),
 		Completed:        b.counters.completed.Load(),
 		Failed:           b.counters.failed.Load(),
@@ -271,30 +272,53 @@ func (b *Batcher[T]) Errors() <-chan error {
 //   - Empty batches are never emitted.
 //   - Shutdown flushes the pending partial batch rather than discarding it.
 //
-// Aggregation runs here and processing runs in its own goroutine, connected by an
-// unbuffered channel. That separation is load-bearing: it lets the next batch
-// accumulate while the current one is being processed. Merging the two measurably
-// changes latency — with a 50ms processor at 10k items/s a merged loop made a 5ms
-// window faster than a 100ms one, inverting the documented baseline — and that is
-// a Phase 3 decision, not this milestone's.
+// Aggregation runs here and processing runs in Concurrency separate goroutines,
+// connected by an UNBUFFERED channel. Two properties follow, and both are
+// deliberate:
+//
+//   - The separation lets the next batch accumulate while the current one is being
+//     processed. Merging them measurably changes latency: with a 50ms processor at
+//     10k items/s a merged loop made a 5ms window faster than a 100ms one,
+//     inverting the documented baseline.
+//   - The channel is unbuffered, so back-pressure stays at admission. A buffered
+//     dispatch queue would silently void the MaxQueueSize contract by holding
+//     batches nobody counted, so accepted-but-unfinished work stays bounded by
+//     MaxQueueSize + BatchSize + (Concurrency × BatchSize) + publishers in the gate.
+//
+// At Concurrency 1 there is exactly one worker, so the processor is never invoked
+// concurrently and batches are processed in publication order. Above 1 the caller
+// has acknowledged, via WithoutOrderedProcessing, that cross-batch ordering and
+// processor mutual exclusion are given up.
 func (b *Batcher[T]) run() {
 	defer close(b.stopped)
 
 	batches := make(chan []T)
 
-	processing := make(chan struct{})
+	workers := b.config.Concurrency
+	if workers < 1 {
+		workers = 1
+	}
 
-	go func() {
-		defer close(processing)
+	var processing sync.WaitGroup
 
-		for items := range batches {
-			b.process(items)
-		}
-	}()
+	processing.Add(workers)
 
+	for range workers {
+		go func() {
+			defer processing.Done()
+
+			for items := range batches {
+				b.process(items)
+			}
+		}()
+	}
+
+	// Closing the dispatch channel stops the workers, and waiting for them is what
+	// makes the drain complete: shutdown must not report success while a worker is
+	// still inside the processor.
 	defer func() {
 		close(batches)
-		<-processing
+		processing.Wait()
 	}()
 
 	var (
@@ -404,11 +428,15 @@ func (b *Batcher[T]) run() {
 // category is counted and the drain obligation is released exactly once. Leaving it
 // unreleased would inflate Pending permanently and hang shutdown forever.
 func (b *Batcher[T]) process(items []T) {
+	b.counters.inFlight.Add(int64(len(items)))
+
 	outcome := outcomeCompleted
 
 	defer func() {
 		b.counters.terminal(outcome, len(items))
 	}()
+
+	defer b.counters.inFlight.Add(int64(-len(items)))
 
 	defer func() {
 		recovered := recover()

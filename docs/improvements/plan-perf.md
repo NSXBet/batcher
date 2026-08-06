@@ -512,7 +512,7 @@ Scenario matrix: windows `500µs, 1, 2, 5, 10, 20, 50, 100ms` × arrivals
   | Sparse-window allocated bytes/flush, 4.2 trigger | > 2 KB/flush to justify work       |
   | 4.2 allocation regression ceiling, any scenario  | ≤ +2% allocated bytes              |
   | Goroutines per idle batcher after 2.2            | exactly 0                          |
-  | Goroutines per running n=1 batcher after 2.2     | exactly 1 (aggregator)             |
+  | Goroutines per running n=1 batcher after 2.2     | exactly 2 (aggregator + processor) |
   | Goroutines after `closed`                        | equal to pre-construction baseline |
 
   Latency percentiles are deliberately absent: they are reported, never gated.
@@ -708,8 +708,10 @@ close-to-terminate model is replaced here, atomically, in one PR.
   baseline. Removing the `chann` relay is expected to make `Add` *faster* than
   today's 335 ns/op (prototype: 136-168 ns/op); a regression here indicates the
   owned queue is mis-implemented.
-- **Goroutine assertions:** 0 per idle batcher, 1 per running `n=1` batcher, and
-  exact return to the pre-construction baseline after `closed`. No queue owns a
+- **Goroutine assertions:** 0 per unstarted batcher, 2 per running `n=1` batcher
+  (aggregator + serial processor), `1 + n` per running `n>1` batcher (aggregator
+  + workers), and exact return to the pre-construction baseline after `closed`.
+  Measured: n=1=2, n=2=3, n=4=5, n=8=9, all with zero leaked. No queue owns a
   goroutine.
 
 **Dependencies**: Milestones 2.1 and 1.3.
@@ -894,8 +896,16 @@ introduces worker-pool dispatch and real concurrent processing.
   cadence, batch-size distribution, admission blocking, pending depth, and
   flush timing under the same slow processor. Documentation labels the observed
   differences contractual: n=1 uses the existing serial aggregation→processor
-  handoff; n>1 aggregates independently until the unbuffered worker dispatch is
-  unavailable; cross-batch ordering is not guaranteed at n>1.
+  handoff; n>1 aggregates independently until the **unbuffered** worker dispatch
+  is unavailable; cross-batch ordering is not guaranteed at n>1.
+
+  The implementation was measured directly at 10k items/s with a 50ms processor
+  and a 5ms window: n=1 p50 70ms / mean batch 476; n=2 p50 25ms / 244; n=4 p50
+  15ms / 123; n=8 p50 4ms / 62. The exact milliseconds are host-sensitive, but
+  the direction is the contract: worker capacity reduces processor-bound latency
+  by flushing smaller batches more often. With a 100ms window and a 20ms processor
+  (timer-bound rather than processor-bound), n=1 and n=4 both measured ~70ms p50,
+  which is the control showing concurrency does not alter the batching rule.
 - Total accepted-but-not-terminal items never exceed
   `N + BatchSize + (n × BatchSize) + PublishersInGate` under a blocked processor;
   the test records `PublishersInGate` separately and demonstrates that its maximum
@@ -916,7 +926,9 @@ introduces worker-pool dispatch and real concurrent processing.
   `running` at `n=1`, `running` at `n>1`, `draining`, and `closed`. Because 2.2
   replaces both `chann` queues with goroutine-free owned queues, the achievable
   budget is: `new` = 0; `running` at `n=1` = 1 (aggregator); `running` at `n>1`
-  = 1 + n; `closed` = 0. Any deviation must be explained in the test rather than
+  = 1 + n; `closed` = 0. (The earlier n=1=1 prediction was invalidated by Phase
+  2, which deliberately retains the separate serial processor goroutine to preserve
+  latency semantics.) Any deviation must be explained in the test rather than
   absorbed into an allowance. The drain coordinator runs on the caller's
   `Shutdown` goroutine and must not add a persistent goroutine; if an
   implementation needs one, the table and this budget must be updated with it

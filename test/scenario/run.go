@@ -45,6 +45,13 @@ type Config struct {
 	Arrival   Arrival
 	Processor Processor
 
+	// BatcherOptions are applied after the harness's batch size, interval and
+	// processor options. They make the same open-loop scenario usable across
+	// implementation modes, such as the acknowledged worker pool in Phase 3.
+	// The harness owns Item, so callers cannot accidentally configure a batcher
+	// for a different payload type.
+	BatcherOptions []batcher.Option[Item]
+
 	// Producers is how many goroutines offer the schedule concurrently.
 	//
 	// The schedule is partitioned round-robin, so the *set* of offer times is
@@ -241,7 +248,7 @@ func Run(cfg Config) Result {
 		start   time.Time
 	)
 
-	b := batcher.New(
+	options := []batcher.Option[Item]{
 		batcher.WithBatchSize[Item](cfg.BatchSize),
 		batcher.WithBatchInterval[Item](cfg.BatchInterval),
 		batcher.WithProcessor(func(items []Item) error {
@@ -273,7 +280,11 @@ func Run(cfg Config) Result {
 
 			return cfg.Processor.Err
 		}),
-	)
+	}
+
+	options = append(options, cfg.BatcherOptions...)
+
+	b := batcher.New(options...)
 
 	// Drain diagnostics so an erroring processor cannot grow memory unboundedly
 	// during the run.
