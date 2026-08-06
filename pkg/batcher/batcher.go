@@ -223,11 +223,13 @@ func (b *Batcher[T]) Stats() Stats {
 		IntakePending:    b.counters.intakePending.Load(),
 		PublishersInGate: b.gate.inGate(),
 		Queued:           int64(b.input.length()),
+		BatchHeld:        b.counters.batchHeld.Load(),
 		InFlight:         b.counters.inFlight.Load(),
 		Accepted:         b.counters.accepted.Load(),
 		Completed:        b.counters.completed.Load(),
 		Failed:           b.counters.failed.Load(),
 		Panicked:         b.counters.panicked.Load(),
+		BatchesFlushed:   b.counters.batchesFlushed.Load(),
 		Rejected:         b.counters.rejected.Load(),
 		DroppedErrors:    b.counters.droppedErrors.Load(),
 	}
@@ -356,7 +358,13 @@ func (b *Batcher[T]) run() {
 
 		stopTimer()
 
+		// The send blocks until a worker is free. Until it returns, the batch is
+		// still aggregator-held, which is the state BatchHeld exists to expose:
+		// releasing the counter before the send would hide a batch waiting on
+		// saturated workers.
 		batches <- items
+
+		b.counters.dispatched(len(items))
 	}
 
 	take := func(item T) {

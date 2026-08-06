@@ -41,9 +41,12 @@ the blocking signal rather than timings.
 | Recovery wrapper allocations, non-panic | exactly 0                                    | `TestRecoveredPanicAddsNoSteadyStateAllocations`              |
 | Scenario recorder allocations per item  | ≤ 1 total, and must not grow with run length | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
 | Goroutines per running batcher, `n=1`   | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
+| `Stats()` allocations                   | exactly 0                                    | `TestStatsIsAllocationFree`                                   |
 
-`Stats()` is a fixed set of atomic loads returning a value type, so it has no
-allocation gate of its own; the `Add` gate covers the hot path that matters.
+`Stats()` returns a value type built from atomic loads plus one queue length check
+under the queue's existing mutex. It now carries its own allocation gate, because
+metrics scraping runs continuously in production and generating garbage per scrape
+would be a real cost.
 
 The recorder threshold is not "exactly 0" because `AllocsPerItem` measures the
 whole pipeline, including Batcher's own per-batch allocations, not just the
