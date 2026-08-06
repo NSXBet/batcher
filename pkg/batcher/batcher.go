@@ -94,14 +94,15 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 }
 
 // Start begins processing. It is idempotent: repeated or concurrent calls start
-// exactly one processing lifecycle. Calling it after shutdown has begun does
-// nothing, because admission is already sealed and there is nothing to serve.
+// exactly one processing lifecycle.
+//
+// Start always launches the consumer, even if shutdown has already sealed
+// admission. That is deliberate: a sealed batcher may still hold queued work, and
+// the drain needs a consumer to make progress. Declining to start here would leave
+// the drain waiting on a consumer that never exists, which deadlocks shutdown when
+// Start and Shutdown race.
 func (b *Batcher[T]) Start() {
 	b.startOnce.Do(func() {
-		if b.gate.isSealed() {
-			return
-		}
-
 		b.gate.state.CompareAndSwap(stateNew, stateRunning)
 
 		go b.run()
@@ -390,15 +391,64 @@ func (b *Batcher[T]) publishError(err error) {
 }
 
 // Close seals admission and drains accepted work, waiting up to the configured
-// grace period.
+// grace period (WithCloseGrace, default 30s).
 //
-// It returns ErrTimeout if the drain has not finished by then, but — unlike the
-// previous implementation — it does NOT abandon the drain: accepted work keeps
-// being processed in the background. Reporting an incomplete drain and discarding
-// it are very different things, and the old behaviour silently dropped accepted
-// items.
+// It reports an incomplete drain if the grace expires, but it does NOT abandon the
+// drain: accepted work keeps being processed in the background. Reporting an
+// incomplete drain and causing one are very different things, and the previous
+// implementation silently discarded accepted items.
+//
+// Callers who want to control the wait, or to keep waiting after a timeout, should
+// use Shutdown.
 func (b *Batcher[T]) Close() error {
-	return b.shutdown(b.config.CloseGrace)
+	ctx, cancel := context.WithTimeout(context.Background(), b.config.CloseGrace)
+	defer cancel()
+
+	return b.Shutdown(ctx)
+}
+
+// Shutdown seals admission and waits for accepted work to drain.
+//
+// It is resumable. If ctx expires first it returns *ShutdownIncompleteError and the
+// drain continues; calling Shutdown again with a fresh context waits on that same
+// drain rather than starting a new one. That is why there is no continuation
+// token: the Batcher itself is the continuation, and it is sealed against new work
+// from the first call onward.
+//
+// Concurrent callers are independent. A caller with a short deadline receives its
+// own timeout error; it is never stored as the batcher's terminal result, so it
+// cannot poison a later caller who waits longer.
+//
+// Processor errors and recovered panics are NOT returned here. They remain on
+// Errors(), because a shutdown result describes the drain, not the work.
+//
+// A processor that never returns holds the batcher in draining indefinitely. This
+// library cannot cancel user code, so Shutdown reports the condition rather than
+// pretending to resolve it.
+func (b *Batcher[T]) Shutdown(ctx context.Context) error {
+	b.beginSealing()
+
+	// An unstarted batcher may still hold queued work. Start the consumer now, or
+	// the drain could never make progress. This is the one case where shutdown
+	// starts a lifecycle, and it must happen before any wait: for a bounded queue
+	// with a parked publisher, nothing else can unblock the gate.
+	b.startDrainConsumer()
+
+	// The coordinator runs independently of any caller's patience.
+	b.shutdownOnce.Do(func() {
+		go b.coordinateDrain()
+	})
+
+	select {
+	case <-b.shutdownDone:
+		return nil
+	case <-ctx.Done():
+		return &ShutdownIncompleteError{
+			Pending:          b.Len(),
+			PublishersInGate: int(b.gate.inGate()),
+			Cause:            ctx.Err(),
+		}
+	}
 }
 
 // IsClosing reports whether admission has been sealed. The drain may still be in
@@ -411,47 +461,6 @@ func (b *Batcher[T]) IsClosing() bool {
 // has exited.
 func (b *Batcher[T]) IsClosed() bool {
 	return b.gate.state.Load() == stateClosed
-}
-
-// shutdown runs the drain protocol, waiting at most grace for it to finish.
-//
-// The step order is load-bearing:
-//
-//  1. seal admission, so no new work is accepted;
-//  2. close sealCh, releasing publishers parked on a full bounded queue — without
-//     this they could never leave the gate;
-//  3. the coordinator checks the gate itself, covering the case where the last
-//     publisher left before sealing and so never signalled;
-//  4. wait for the gate to empty, WITHOUT blocking the aggregator, which must keep
-//     draining so parked publishers can make progress;
-//  5. only then declare intake finished, so the aggregator can drain by accounting
-//     and flush its final partial batch;
-//  6. close diagnostics last, once no sender remains.
-func (b *Batcher[T]) shutdown(grace time.Duration) error {
-	b.beginSealing()
-
-	// An unstarted batcher may still hold queued work. Start the consumer now, or
-	// the drain below could never make progress. This is the one case where
-	// shutdown starts a lifecycle.
-	b.startDrainConsumer()
-
-	// The coordinator runs independently of any caller's patience, so a caller that
-	// gives up cannot abandon accepted work.
-	b.shutdownOnce.Do(func() {
-		go b.coordinateDrain()
-	})
-
-	deadline := time.NewTimer(grace)
-	defer deadline.Stop()
-
-	select {
-	case <-b.shutdownDone:
-		return nil
-	case <-deadline.C:
-		// The drain continues in the background. Reporting that it is unfinished is
-		// the honest answer; discarding it would be data loss.
-		return ErrTimeout
-	}
 }
 
 // coordinateDrain performs the drain exactly once, however many callers are
@@ -497,10 +506,11 @@ func (b *Batcher[T]) beginSealing() {
 
 // startDrainConsumer ensures a consumer exists to drain queued work during
 // shutdown, even if the batcher was never started.
+//
+// It shares startOnce with Start, so exactly one consumer ever runs regardless of
+// which path gets there first.
 func (b *Batcher[T]) startDrainConsumer() {
-	b.startOnce.Do(func() {
-		go b.run()
-	})
+	b.Start()
 }
 
 // finish performs terminal cleanup exactly once: close diagnostics after every

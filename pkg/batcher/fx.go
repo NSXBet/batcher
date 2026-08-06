@@ -38,12 +38,17 @@ func ProvideBatcherInFX[T any](
 					return nil
 				}))
 
-				lifecycle.Append(fx.StopHook(func(context.Context) error {
-					if err := batcher.Close(); err != nil {
-						return err
-					}
-
-					return nil
+				// Forward the stop-hook context instead of discarding it, so the
+				// application's shutdown deadline governs the drain. Previously this
+				// used Close's own timeout, which meant an app with a longer grace
+				// period could not use it, and one with a shorter deadline could not
+				// bound it.
+				//
+				// If the hook's context expires the drain continues in the background
+				// and the error describes what remained, rather than silently
+				// discarding accepted work.
+				lifecycle.Append(fx.StopHook(func(ctx context.Context) error {
+					return batcher.Shutdown(ctx)
 				}))
 			},
 		),
