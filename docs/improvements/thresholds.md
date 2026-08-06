@@ -27,12 +27,15 @@ orientation only and are not gates.
 Allocation counts are stable even on noisy shared runners, which is why they are
 the blocking signal rather than timings.
 
-| Gate                                    | Threshold | Enforced by                              |
-| --------------------------------------- | --------- | ---------------------------------------- |
-| `Add` allocations, unbounded path       | exactly 0 | `TestAddAllocatesNothingPerCall`         |
-| `Stats()` allocations                   | exactly 0 | added with `Stats()` in Phase 2          |
-| Recovery wrapper allocations, non-panic | exactly 0 | added with panic recovery in Phase 2     |
+| Gate                                    | Threshold                                    | Enforced by                                                   |
+| --------------------------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| `Add` allocations, unbounded path       | exactly 0                                    | `TestAddAllocatesNothingPerCall`                              |
+| Recovery wrapper allocations, non-panic | exactly 0                                    | `TestRecoveredPanicAddsNoSteadyStateAllocations`              |
 | Scenario recorder allocations per item  | ≤ 1 total, and must not grow with run length | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
+| Goroutines per running batcher          | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
+
+`Stats()` is a fixed set of atomic loads returning a value type, so it has no
+allocation gate of its own; the `Add` gate covers the hot path that matters.
 
 The recorder threshold is not "exactly 0" because `AllocsPerItem` measures the
 whole pipeline, including Batcher's own per-batch allocations, not just the
@@ -40,12 +43,12 @@ recorder. Measured values are 0.03-0.04 allocations per item and do not grow wit
 run length, which is the property that matters: a recorder that allocated per item
 would make every allocation figure it reports a measurement of itself.
 
-`Add` currently allocates 0 per call in the timed region because the item is
-constructed by the caller. Phase 2 replaces `chann` with a slice-backed unbounded
-queue, at which point the gate becomes "zero allocations per `Add` in steady
-state": `append` must allocate when it grows its backing array, so the gate is
-measured after a stated warmup with queue capacity retained across drains, and
-growth-path allocations are the one named exemption.
+`Add` allocates 0 per call in the timed region because the item is constructed by
+the caller. Phase 2 replaced `chann` with a slice-backed unbounded queue, so the
+gate is now "zero allocations per `Add` in steady state": `append` must allocate
+when it grows its backing array, so the gate is measured after a stated warmup
+with queue capacity retained across drains, and growth-path allocations are the
+one named exemption.
 
 ## Throughput gate (advisory until CI baseline exists)
 

@@ -1167,8 +1167,15 @@ valid stopping point:
   54% faster), and the internal seal/gate/`noInput` coordinator is complete.
   `Close()` keeps its existing signature, no longer abandons the drain, and a
   minimal `Stats()` is public; only the resumable API and typed error are absent.
-- Stopping after **2.3**: no accepted work is ever silently discarded.
-- Stopping after **2.4**: diagnostics bounded, panics survivable.
+- Stopping after **2.3**: no accepted work is ever silently discarded. Verified
+  directly: a partial batch with a 30s interval and a shorter grace now reports 50
+  accepted / 50 processed / 0 pending, where it previously reported 50 accepted /
+  0 processed / 50 phantom pending.
+- Stopping after **2.4**: diagnostics bounded, panics survivable. Phase 2 as a
+  whole is verified against the original defects: `Add` after `Close` is a counted
+  rejection instead of a process panic, bounded mode caps the queue and reports
+  rejections instead of growing the heap without limit, and goroutines per batcher
+  are 2 with none leaked.
 - Stopping after **3.x**: small windows are honoured under slow processors.
 - Stopping after **4.x**: operators can see overload developing.
 
