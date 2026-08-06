@@ -839,9 +839,10 @@ Prototype evidence, 5ms window and 50ms processor at 10,000 items/s:
 | decoupled, n=4                   | 124        | **9.6ms** |
 
 Naive decoupling at `n=1` is **2.5x worse**, because it adds a stage without
-adding capacity. Inline aggregation already self-tunes: items pool while the
-processor runs, so the next batch is larger. Therefore the `n=1` path is left
-inline and unchanged; only `n>1` introduces a worker pool.
+adding capacity. Phase 2 already has one unbuffered aggregation→processing handoff
+for behaviour preservation; the relevant constraint is that `n=1` adds **no
+additional worker-pool dispatch** and invokes the processor serially. Only `n>1`
+introduces worker-pool dispatch and real concurrent processing.
 
 ### Milestone 3.1 — Concurrency configuration and ordering contract
 
@@ -850,11 +851,10 @@ inline and unchanged; only `n>1` introduces a worker pool.
 - Add `WithConcurrency(n)`; set `DefaultConcurrency = 1`.
 - Add `WithoutOrderedProcessing()` as an acknowledgement-only gate.
 - Panic at construction when `n > 1` without the acknowledgement.
-- Keep the `n = 1` aggregation path **without a worker-handoff stage**. It is
-  not byte-for-byte identical after Phase 2 — it necessarily uses the new gate,
-  accounting, drain, recovery, and stats machinery — but it preserves the
-  important performance shape: aggregation invokes the processor inline and no
-  additional dispatch queue exists.
+- Keep the `n = 1` path without an **additional worker-pool dispatch**. Phase 2
+  already has one unbuffered aggregation→processing handoff; it is retained because
+  removing it changes observable latency. At `n=1` the processor remains serial
+  and no worker pool or extra dispatch queue is introduced.
 - Document FIFO-by-publication-order and processor mutual-exclusion guarantees
   for `n = 1`.
 
@@ -893,9 +893,9 @@ inline and unchanged; only `n>1` introduces a worker pool.
 - **Semantic-difference matrix:** scenarios compare `n=1` and `n>1` timer
   cadence, batch-size distribution, admission blocking, pending depth, and
   flush timing under the same slow processor. Documentation labels the observed
-  differences contractual: n=1 aggregates inline; n>1 aggregates independently
-  until the unbuffered worker dispatch is unavailable; cross-batch ordering is
-  not guaranteed at n>1.
+  differences contractual: n=1 uses the existing serial aggregation→processor
+  handoff; n>1 aggregates independently until the unbuffered worker dispatch is
+  unavailable; cross-batch ordering is not guaranteed at n>1.
 - Total accepted-but-not-terminal items never exceed
   `N + BatchSize + (n × BatchSize) + PublishersInGate` under a blocked processor;
   the test records `PublishersInGate` separately and demonstrates that its maximum

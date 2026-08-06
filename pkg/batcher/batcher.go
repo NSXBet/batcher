@@ -3,6 +3,7 @@ package batcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ type Config[T any] struct {
 	CloseGrace      time.Duration
 	ErrorBufferSize int
 	ProcessorFunc   Processor[T]
+
+	// UnorderedProcessingAcknowledged records that the caller accepted the
+	// ordering trade required for Concurrency > 1. See WithoutOrderedProcessing.
+	UnorderedProcessingAcknowledged bool
 }
 
 type Batcher[T any] struct {
@@ -86,6 +91,8 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 		option(b)
 	}
 
+	b.validateConfig()
+
 	b.input = newQueue[T](b.config.MaxQueueSize)
 	b.errorsChan = make(chan error, b.config.ErrorBufferSize)
 
@@ -94,6 +101,25 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	}
 
 	return b
+}
+
+// validateConfig rejects configurations whose guarantees contradict each other.
+//
+// This panics rather than returning an error because New has never been able to
+// fail, and adding an error return would break every existing call site for a
+// mistake that is always a programming error: the combination is fixed at
+// construction, so it is caught by the first test run rather than in production.
+func (b *Batcher[T]) validateConfig() {
+	if b.config.Concurrency > 1 && !b.config.UnorderedProcessingAcknowledged {
+		panic(fmt.Sprintf(
+			"batcher: WithConcurrency(%d) requires WithoutOrderedProcessing(). "+
+				"Concurrent processing gives up cross-batch ordering and lets the "+
+				"processor be invoked concurrently, so the processor must be "+
+				"goroutine-safe. Add WithoutOrderedProcessing() to acknowledge this, "+
+				"or keep WithConcurrency(1).",
+			b.config.Concurrency,
+		))
+	}
 }
 
 // Start begins processing. It is idempotent: repeated or concurrent calls start
