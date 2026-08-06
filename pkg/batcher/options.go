@@ -41,3 +41,34 @@ func WithSkipAutoStart[T any]() Option[T] {
 		b.config.SkipAutoStart = true
 	}
 }
+
+// WithMaxQueueSize bounds the number of queued items.
+//
+// The default is unbounded, which absorbs bursts but converts a sustained
+// overload into unbounded memory growth. Bounding it gives back-pressure instead:
+// Add blocks while the queue is full, and Enqueue can report the condition.
+//
+// Note this bounds queued items only. Total accepted-but-unfinished work is
+// bounded by N + BatchSize + publishers currently inside the publication window,
+// because a batch being processed has already left the queue.
+func WithMaxQueueSize[T any](maxQueueSize int) Option[T] {
+	return func(b *Batcher[T]) {
+		if maxQueueSize < 0 {
+			maxQueueSize = 0
+		}
+
+		b.config.MaxQueueSize = maxQueueSize
+	}
+}
+
+// WithCloseGrace sets how long Close waits for the drain to complete before
+// reporting ErrTimeout. The drain is never abandoned when the grace expires.
+func WithCloseGrace[T any](grace time.Duration) Option[T] {
+	return func(b *Batcher[T]) {
+		if grace <= 0 {
+			grace = DefaultCloseGrace
+		}
+
+		b.config.CloseGrace = grace
+	}
+}

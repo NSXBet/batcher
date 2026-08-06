@@ -10,27 +10,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// goroutinesPerRunningBatcher is the owned-goroutine budget for a constructed,
-// auto-started batcher:
+// goroutinesPerRunningBatcher is the owned-goroutine budget after Phase 2.2:
 //
-//  1. the unbounded input queue's relay
-//  2. the input forwarder
-//  3. the aggregator
-//  4. the processing loop
-//  5. the unbounded error queue's relay
+//  1. the aggregator
+//  2. the processing loop
 //
-// Phase 2.2 removes both queue relays and the forwarder with them, which will
-// lower this to 2. Any change to this number is a design change and must be
-// deliberate, so it is asserted rather than left to a measurement someone runs by
-// hand.
-const goroutinesPerRunningBatcher = 5
+// The input queue and diagnostics queue are owned data structures, not relay
+// goroutines. Aggregation and processing remain separate because merging them
+// changes observable latency; Phase 3 may change this topology when it introduces
+// explicit worker concurrency.
+const goroutinesPerRunningBatcher = 2
 
 // TestGoroutineBudgetPerRunningBatcher pins the owned-goroutine count.
 //
-// Milestone 2.1's headline claim is that removing rill reduces goroutines per
-// batcher from 6 to 5 without changing behaviour. That claim is only meaningful if
-// something enforces it, so this test measures the real cost of many live
-// batchers and fails if the budget drifts in either direction.
+// The count started at 6 (rill plus chann relays), dropped to 5 when rill was
+// replaced in 2.1, and reaches 2 in 2.2 once both relay-backed queues become owned
+// data structures. Per-batcher goroutine cost matters because callers create one
+// batcher per tenant or per key, so this is asserted rather than left to a
+// measurement someone runs by hand.
 func TestGoroutineBudgetPerRunningBatcher(t *testing.T) {
 	// Not parallel: goroutine counting requires no other test starting or
 	// stopping batchers concurrently.

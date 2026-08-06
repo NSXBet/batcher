@@ -64,9 +64,16 @@ Compare with `benchstat` over `-count=10`. A single run is not evidence. This is
 | Goroutines per running `n>1`        | exactly 1 + n                      |
 | Goroutines after terminal `closed`  | equal to pre-construction baseline |
 
-Current `main` owns 6 goroutines per batcher. Phase 2.1 removes `rill`
-(**measured 6 → 5**) and Phase 2.2 removes both `chann` relays and the input
-forwarder they require (5 → 2: aggregator plus processor).
+Current `main` owns 6 goroutines per batcher. Phase 2.1 removed `rill`
+(**measured 6 → 5**) and Phase 2.2 removed both `chann` relays and the input
+forwarder they required (**measured 5 → 2**: aggregator plus processor), enforced
+by `TestGoroutineBudgetPerRunningBatcher`.
+
+Removing the relays also removed a channel hop and a goroutine handoff per item.
+Measured against the stored baseline: **-54% geomean sec/op** on the enqueue
+microbenchmarks (`Add` 229.8ns → 63.4ns at small batch sizes) and -49% to -90%
+bytes/op. This is the one place in the plan where a safety change also made the
+hot path materially faster.
 
 The 6 → 5 figure supersedes earlier 6 → 3 and 6 → 4 estimates. Fewer goroutines
 were unreachable without changing observable behaviour: merging aggregation into

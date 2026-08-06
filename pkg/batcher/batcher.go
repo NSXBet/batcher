@@ -1,15 +1,19 @@
 package batcher
 
 import (
-	"fmt"
-	"math"
+	"context"
+	"errors"
 	"sync"
 	"time"
-
-	"golang.design/x/chann"
 )
 
-var ErrTimeout = fmt.Errorf("timeout waiting for batches to complete")
+// ErrTimeout is returned when a wait for pending work to finish expires.
+var ErrTimeout = errors.New("timeout waiting for batches to complete")
+
+// ErrClosing is returned by Enqueue when admission has been sealed, and by a
+// blocking enqueue that is released by shutdown. It means the item was not
+// accepted and no work was queued for it.
+var ErrClosing = errors.New("batcher is closing")
 
 type Processor[T any] func([]T) error
 
@@ -22,19 +26,40 @@ type Config[T any] struct {
 	BatchSize     int
 	BatchInterval time.Duration
 	Concurrency   int
+	MaxQueueSize  int
+	CloseGrace    time.Duration
 	ProcessorFunc Processor[T]
 }
 
 type Batcher[T any] struct {
 	config *Config[T]
 
-	isClosed       bool
-	closeOnce      sync.Once
-	itemCount      *AtomicCounter
-	doneChan       chan struct{}
-	errorsChan     *chann.Chann[error]
-	batchInputChan *chann.Chann[T]
-	batchesChan    <-chan []T
+	gate     *admissionGate
+	counters counters
+
+	// input is never closed, for the life of the batcher. A publisher can
+	// therefore never send on a closed channel, which removes an entire class of
+	// shutdown panic. Intake completion is signalled by noInput instead.
+	input *queue[T]
+
+	// errorsChan is a plain buffered channel closed exactly once, by the drain
+	// coordinator, after every possible sender has exited.
+	errorsChan chan error
+
+	// noInput is closed by the coordinator once no publisher can ever send again.
+	// It is what lets the aggregator conclude that intake is finished, since the
+	// queue itself is never closed.
+	noInput   chan struct{}
+	stopped   chan struct{}
+	startOnce sync.Once
+	drainOnce sync.Once
+
+	// shutdownDone closes only after the independent coordinator has finished
+	// draining accepted work and closed diagnostics. A Close caller may time out,
+	// but the coordinator never does: reporting an incomplete drain is not the
+	// same as abandoning it.
+	shutdownOnce sync.Once
+	shutdownDone chan struct{}
 }
 
 // New creates a new Batcher with the given options.
@@ -44,24 +69,22 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 			BatchSize:     DefaultBatchSize,
 			BatchInterval: DefaultBatchInterval,
 			Concurrency:   DefaultConcurrency,
+			CloseGrace:    DefaultCloseGrace,
 			ProcessorFunc: NoOpProcessor[T],
 		},
 
-		itemCount:      NewAtomicCounter(),
-		doneChan:       make(chan struct{}),
-		batchInputChan: chann.New[T](chann.Cap(-1)),
+		gate:         newAdmissionGate(),
+		noInput:      make(chan struct{}),
+		stopped:      make(chan struct{}),
+		shutdownDone: make(chan struct{}),
 	}
 
 	for _, option := range options {
 		option(b)
 	}
 
-	b.errorsChan = chann.New[error](chann.Cap(-1))
-	b.batchesChan = aggregate(
-		forward(b.batchInputChan.Out()),
-		b.config.BatchSize,
-		b.config.BatchInterval,
-	)
+	b.input = newQueue[T](b.config.MaxQueueSize)
+	b.errorsChan = make(chan error, DefaultErrorBufferSize)
 
 	if !b.config.SkipAutoStart {
 		b.Start()
@@ -70,147 +93,119 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	return b
 }
 
-// forward relays items from the unbounded input queue onto an unbuffered channel,
-// closing it when the source is closed.
-//
-// This stage exists for a measured reason, not for symmetry. The unbounded queue
-// has a small bounded ingress buffer, so its output has to be consumed promptly
-// or producers start paying for the backlog. When the aggregator read that output
-// directly, sequential Add regressed 39-50% against the stored baseline, because
-// the aggregator interleaves reads with timer and slice bookkeeping. Splitting the
-// drain out restored parity. It is the same separation rill's pipeline provided.
-//
-// Phase 2.2 removes this stage along with the unbounded queue itself: an owned
-// queue can be read directly without a relay.
-func forward[T any](in <-chan T) <-chan T {
-	out := make(chan T)
-
-	go func() {
-		defer close(out)
-
-		for item := range in {
-			out <- item
-		}
-	}()
-
-	return out
-}
-
-// aggregate groups items from in into batches, emitting a batch when it reaches
-// size, when interval elapses, or when in is closed.
-//
-// This replaces rill.Batch and deliberately preserves its semantics, which the
-// characterization tests pin:
-//
-//   - The interval timer is armed when the first item enters an empty batch, not
-//     on a periodic tick. A sparse producer therefore waits one full interval per
-//     item, and an idle batcher performs no work at all.
-//   - A batch reaching n is emitted immediately, without waiting for the timer.
-//   - Empty batches are never emitted, so a processor always receives at least
-//     one item.
-//   - Closing in flushes any pending partial batch, then closes out.
-//
-// Aggregation runs in its own goroutine and hands batches over an unbuffered
-// channel. That separation is load-bearing: it lets the next batch accumulate
-// while the current one is being processed. Merging the two stages would make the
-// effective flush interval max(interval, processor duration) and change latency
-// for every caller, which is a later phase's decision, not this one's.
-func aggregate[T any](in <-chan T, n int, interval time.Duration) <-chan []T {
-	out := make(chan []T)
-
-	go func() {
-		defer close(out)
-
-		var (
-			batch []T
-			timer *time.Timer
-			// timerC stays nil while the batch is empty, disabling that select arm
-			// rather than relying on a stopped timer never firing.
-			timerC <-chan time.Time
-		)
-
-		stopTimer := func() {
-			timerC = nil
-
-			if timer == nil {
-				return
-			}
-
-			if !timer.Stop() {
-				// Drain a tick that fired while we were emitting, so the next batch
-				// cannot inherit a stale expiry.
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-		}
-
-		flush := func() {
-			if len(batch) == 0 {
-				return
-			}
-
-			items := batch
-			batch = nil
-
-			stopTimer()
-
-			out <- items
-		}
-
-		for {
-			select {
-			case item, ok := <-in:
-				if !ok {
-					flush()
-
-					return
-				}
-
-				if len(batch) == 0 {
-					batch = make([]T, 0, n)
-
-					if timer == nil {
-						timer = time.NewTimer(interval)
-					} else {
-						timer.Reset(interval)
-					}
-
-					timerC = timer.C
-				}
-
-				batch = append(batch, item)
-
-				if len(batch) >= n {
-					flush()
-				}
-			case <-timerC:
-				flush()
-			}
-		}
-	}()
-
-	return out
-}
-
+// Start begins processing. It is idempotent: repeated or concurrent calls start
+// exactly one processing lifecycle. Calling it after shutdown has begun does
+// nothing, because admission is already sealed and there is nothing to serve.
 func (b *Batcher[T]) Start() {
-	go b.startProcessing()
+	b.startOnce.Do(func() {
+		if b.gate.isSealed() {
+			return
+		}
+
+		b.gate.state.CompareAndSwap(stateNew, stateRunning)
+
+		go b.run()
+	})
 }
 
+// Config returns the batcher's configuration.
 func (b *Batcher[T]) Config() *Config[T] {
 	return b.config
 }
 
+// Add enqueues an item. It is the compatibility fast path and returns no error.
+//
+// In unbounded mode it never blocks. In bounded mode it blocks while the queue is
+// full, exactly as it did before bounding existed, and shutdown releases it. After
+// admission is sealed it is a no-op that counts a rejection: it neither panics nor
+// silently pretends to have accepted the item.
+//
+// Callers that need to observe rejection or bound their wait should use Enqueue.
 func (b *Batcher[T]) Add(item T) {
-	b.batchInputChan.In() <- item
-	b.itemCount.Add(1)
+	_ = b.publish(context.Background(), item, true)
 }
 
+// Enqueue enqueues an item, reporting why it could not be accepted.
+//
+// It returns ErrClosing when admission is sealed, ctx.Err() when the caller's
+// context expires while waiting for space in a bounded queue, or nil on success.
+// A non-nil error means nothing was queued.
+func (b *Batcher[T]) Enqueue(ctx context.Context, item T) error {
+	return b.publish(ctx, item, false)
+}
+
+// publish is the single admission path shared by Add and Enqueue.
+//
+// The ordering here is the protocol, and each step exists for a reason:
+//
+//  1. enter the gate, so shutdown cannot conclude that intake is finished while
+//     this publisher is still deciding;
+//  2. reserve the drain obligation BEFORE publishing, so the drain cannot
+//     terminate in the window between reserving and publishing;
+//  3. publish;
+//  4. on failure, roll the reservation back BEFORE leaving the gate, so no
+//     phantom obligation can outlive the gate;
+//  5. leave the gate.
+func (b *Batcher[T]) publish(ctx context.Context, item T, nonBlockingWhenFull bool) error {
+	if !b.gate.enter() {
+		b.counters.rejected.Add(1)
+
+		return ErrClosing
+	}
+
+	defer b.gate.leave()
+
+	b.counters.reserve()
+
+	var err error
+
+	if nonBlockingWhenFull && b.config.MaxQueueSize <= 0 {
+		// Unbounded fast path: publication cannot fail.
+		_ = b.input.tryPush(item)
+	} else {
+		err = b.input.push(ctx, item, b.gate.sealCh)
+	}
+
+	if err != nil {
+		b.counters.rollback()
+
+		return err
+	}
+
+	b.counters.accept()
+
+	return nil
+}
+
+// Len reports accepted-or-reserved work that has not reached a terminal outcome.
+//
+// Note this includes work currently inside a processor call, so it can be non-zero
+// while the queue is empty. Use Stats().Queued for queue depth.
 func (b *Batcher[T]) Len() int {
-	return int(b.itemCount.Read())
+	return int(b.counters.pending.Load())
 }
 
+// Stats returns an O(1), allocation-free snapshot of the batcher's counters. See
+// Stats for its consistency guarantees.
+func (b *Batcher[T]) Stats() Stats {
+	return Stats{
+		Pending:          b.counters.pending.Load(),
+		IntakePending:    b.counters.intakePending.Load(),
+		PublishersInGate: b.gate.inGate(),
+		Queued:           int64(b.input.length()),
+		Accepted:         b.counters.accepted.Load(),
+		Completed:        b.counters.completed.Load(),
+		Failed:           b.counters.failed.Load(),
+		Panicked:         b.counters.panicked.Load(),
+		Rejected:         b.counters.rejected.Load(),
+	}
+}
+
+// Join waits until no work is pending, or the timeout expires.
+//
+// This is a quiescence snapshot, not a barrier: a concurrent Add can make work
+// pending again the instant it returns. It is only authoritative after admission
+// has been sealed.
 func (b *Batcher[T]) Join(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
@@ -227,87 +222,297 @@ func (b *Batcher[T]) Join(timeout time.Duration) error {
 	}
 }
 
-// startProcessing consumes aggregated batches and invokes the processor for each
-// one.
+// Errors returns the diagnostics channel. It is closed once shutdown completes,
+// so a consumer ranging over it terminates.
+func (b *Batcher[T]) Errors() <-chan error {
+	return b.errorsChan
+}
+
+// run aggregates items into batches and hands each one to the processing loop.
 //
-// Teardown order matters and is preserved from the previous implementation:
+// Batching rules, unchanged from the previous implementation and pinned by the
+// characterization tests:
 //
-//  1. close the input queue, so aggregation sees end-of-input and flushes its
-//     pending partial batch;
-//  2. drain the batch channel, so the aggregation goroutine can exit rather than
-//     blocking forever on an unbuffered send;
-//  3. close the errors channel last, once no further error can be published.
+//   - The interval timer is armed when the first item enters an empty batch, not
+//     on a periodic tick. A sparse producer waits one interval per item, and an
+//     idle batcher does no work at all.
+//   - A batch reaching BatchSize flushes immediately.
+//   - Empty batches are never emitted.
+//   - Shutdown flushes the pending partial batch rather than discarding it.
 //
-// Batches drained during step 2 after a shutdown signal are discarded without
-// being processed. That is existing behaviour, and it is the data-loss path a
-// later milestone replaces; this commit does not change it.
-func (b *Batcher[T]) startProcessing() {
-	defer b.errorsChan.Close()
-	defer func() {
-		for range b.batchesChan {
-			// Drain without processing so aggregation can finish and exit.
+// Aggregation runs here and processing runs in its own goroutine, connected by an
+// unbuffered channel. That separation is load-bearing: it lets the next batch
+// accumulate while the current one is being processed. Merging the two measurably
+// changes latency — with a 50ms processor at 10k items/s a merged loop made a 5ms
+// window faster than a 100ms one, inverting the documented baseline — and that is
+// a Phase 3 decision, not this milestone's.
+func (b *Batcher[T]) run() {
+	defer close(b.stopped)
+
+	batches := make(chan []T)
+
+	processing := make(chan struct{})
+
+	go func() {
+		defer close(processing)
+
+		for items := range batches {
+			b.process(items)
 		}
 	}()
-	defer b.batchInputChan.Close()
 
-	for {
-		select {
-		case <-b.doneChan:
+	defer func() {
+		close(batches)
+		<-processing
+	}()
+
+	var (
+		batch  []T
+		timer  *time.Timer
+		timerC <-chan time.Time
+	)
+
+	stopTimer := func() {
+		timerC = nil
+
+		if timer == nil {
 			return
-		case items, ok := <-b.batchesChan:
+		}
+
+		if !timer.Stop() {
+			// Drain a tick that fired while we were flushing, so the next batch
+			// cannot inherit a stale expiry and flush early.
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		items := batch
+		batch = nil
+
+		stopTimer()
+
+		batches <- items
+	}
+
+	take := func(item T) {
+		if len(batch) == 0 {
+			batch = make([]T, 0, b.config.BatchSize)
+
+			if timer == nil {
+				timer = time.NewTimer(b.config.BatchInterval)
+			} else {
+				timer.Reset(b.config.BatchInterval)
+			}
+
+			timerC = timer.C
+		}
+
+		batch = append(batch, item)
+
+		if len(batch) >= b.config.BatchSize {
+			flush()
+		}
+	}
+
+	// drainReady empties whatever is currently queued. The aggregator drains
+	// greedily rather than one item per wakeup, so a burst costs one signal.
+	drainReady := func() {
+		for {
+			item, ok := b.input.pop()
 			if !ok {
 				return
 			}
 
-			if err := b.config.ProcessorFunc(items); err != nil {
-				b.errorsChan.In() <- err
+			b.counters.received(1)
+			take(item)
+		}
+	}
+
+	for {
+		select {
+		case <-b.input.ready():
+			drainReady()
+		case <-timerC:
+			flush()
+		case <-b.noInput:
+			// Intake is finished: no publisher can ever send again. Drain by
+			// accounting rather than by observing an empty queue, so an item that was
+			// reserved-then-published during shutdown cannot be missed.
+			for b.counters.intakePending.Load() > 0 {
+				drainReady()
 			}
 
-			// Errored batches still count as completed work, so Join cannot hang on
-			// a processor that always fails. Retry policy belongs to the caller.
-			b.itemCount.Add(int64(-len(items)))
+			flush()
+
+			return
 		}
 	}
 }
 
-func (b *Batcher[T]) Errors() <-chan error {
-	return b.errorsChan.Out()
+// process invokes the processor for one batch and records exactly one terminal
+// outcome for it.
+func (b *Batcher[T]) process(items []T) {
+	err := b.config.ProcessorFunc(items)
+
+	outcome := outcomeCompleted
+
+	if err != nil {
+		outcome = outcomeFailed
+
+		b.publishError(err)
+	}
+
+	// A failed batch still releases its drain obligation: shutdown must not hang
+	// because a processor keeps returning errors. Retry policy belongs to the
+	// caller, which is why the error is reported rather than retried here.
+	b.counters.terminal(outcome, len(items))
 }
 
+// publishError reports a diagnostic without ever blocking the pipeline.
+//
+// Dropping is deliberate. A blocking send with no reader would deadlock a failing
+// pipeline, which is strictly worse than losing a diagnostic, and an error is
+// diagnostic rather than payload. Milestone 2.4 adds the drop counter.
+func (b *Batcher[T]) publishError(err error) {
+	select {
+	case b.errorsChan <- err:
+	default:
+		b.counters.droppedErrors.Add(1)
+	}
+}
+
+// Close seals admission and drains accepted work, waiting up to the configured
+// grace period.
+//
+// It returns ErrTimeout if the drain has not finished by then, but — unlike the
+// previous implementation — it does NOT abandon the drain: accepted work keeps
+// being processed in the background. Reporting an incomplete drain and discarding
+// it are very different things, and the old behaviour silently dropped accepted
+// items.
 func (b *Batcher[T]) Close() error {
-	var clErr error
+	return b.shutdown(b.config.CloseGrace)
+}
 
-	b.closeOnce.Do(func() {
-		// Calculate timeout based on pending items, with a maximum of 10 seconds
-		timeout := time.Duration(2*2*math.Ceil(float64(b.Len())/float64(b.config.BatchSize))) *
-			b.config.BatchInterval
+// IsClosing reports whether admission has been sealed. The drain may still be in
+// progress.
+func (b *Batcher[T]) IsClosing() bool {
+	return b.gate.state.Load() >= stateSealing
+}
 
-		// Cap the timeout at 10 seconds to prevent indefinite blocking
-		maxTimeout := 10 * time.Second
-		if timeout > maxTimeout {
-			timeout = maxTimeout
-		}
+// IsClosed reports whether shutdown has fully completed and every owned goroutine
+// has exited.
+func (b *Batcher[T]) IsClosed() bool {
+	return b.gate.state.Load() == stateClosed
+}
 
-		// Ensure a minimum timeout of 100ms
-		if timeout < 100*time.Millisecond {
-			timeout = 100 * time.Millisecond
-		}
+// shutdown runs the drain protocol, waiting at most grace for it to finish.
+//
+// The step order is load-bearing:
+//
+//  1. seal admission, so no new work is accepted;
+//  2. close sealCh, releasing publishers parked on a full bounded queue — without
+//     this they could never leave the gate;
+//  3. the coordinator checks the gate itself, covering the case where the last
+//     publisher left before sealing and so never signalled;
+//  4. wait for the gate to empty, WITHOUT blocking the aggregator, which must keep
+//     draining so parked publishers can make progress;
+//  5. only then declare intake finished, so the aggregator can drain by accounting
+//     and flush its final partial batch;
+//  6. close diagnostics last, once no sender remains.
+func (b *Batcher[T]) shutdown(grace time.Duration) error {
+	b.beginSealing()
 
-		clErr = b.Join(timeout)
+	// An unstarted batcher may still hold queued work. Start the consumer now, or
+	// the drain below could never make progress. This is the one case where
+	// shutdown starts a lifecycle.
+	b.startDrainConsumer()
 
-		// Signal shutdown to the processing goroutine
-		close(b.doneChan)
-
-		// Give the goroutine a moment to exit cleanly
-		// This allows the deferred cleanup to run
-		time.Sleep(50 * time.Millisecond)
-
-		b.isClosed = true
+	// The coordinator runs independently of any caller's patience, so a caller that
+	// gives up cannot abandon accepted work.
+	b.shutdownOnce.Do(func() {
+		go b.coordinateDrain()
 	})
 
-	return clErr
+	deadline := time.NewTimer(grace)
+	defer deadline.Stop()
+
+	select {
+	case <-b.shutdownDone:
+		return nil
+	case <-deadline.C:
+		// The drain continues in the background. Reporting that it is unfinished is
+		// the honest answer; discarding it would be data loss.
+		return ErrTimeout
+	}
 }
 
-func (b *Batcher[T]) IsClosed() bool {
-	return b.isClosed
+// coordinateDrain performs the drain exactly once, however many callers are
+// waiting and however soon they give up.
+func (b *Batcher[T]) coordinateDrain() {
+	defer close(b.shutdownDone)
+
+	// Wait for publishers to leave the publication window. The aggregator keeps
+	// draining throughout, which is what lets a publisher parked on a full bounded
+	// queue make progress and exit the gate.
+	<-b.gate.empty()
+
+	b.gate.state.CompareAndSwap(stateSealing, stateDraining)
+
+	// Only now can the aggregator conclude that intake is finished: no publisher
+	// can ever send again.
+	b.drainOnce.Do(func() {
+		close(b.noInput)
+	})
+
+	<-b.stopped
+
+	b.finish()
+}
+
+// beginSealing closes admission and performs the coordinator's own quiescence
+// check.
+func (b *Batcher[T]) beginSealing() {
+	for {
+		current := b.gate.state.Load()
+		if current >= stateSealing {
+			break
+		}
+
+		if b.gate.state.CompareAndSwap(current, stateSealing) {
+			break
+		}
+	}
+
+	b.gate.seal()
+	b.gate.checkEmpty()
+}
+
+// startDrainConsumer ensures a consumer exists to drain queued work during
+// shutdown, even if the batcher was never started.
+func (b *Batcher[T]) startDrainConsumer() {
+	b.startOnce.Do(func() {
+		go b.run()
+	})
+}
+
+// finish performs terminal cleanup exactly once: close diagnostics after every
+// sender has exited, then mark the batcher closed.
+func (b *Batcher[T]) finish() {
+	if b.gate.state.CompareAndSwap(stateDraining, stateClosed) {
+		close(b.errorsChan)
+
+		return
+	}
+
+	// Another caller may already be finishing; make sure the terminal state is
+	// visible before returning.
+	b.gate.state.CompareAndSwap(stateSealing, stateClosed)
 }

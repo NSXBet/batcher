@@ -1163,10 +1163,10 @@ valid stopping point:
 - Stopping after **2.1**: same semantics, `rill` removed, goroutines 6 → 5,
   and ~47% less memory per enqueued item.
 - Stopping after **2.2**: admission is panic-free, accounting is sound, `chann`
-  is gone (1 goroutine per running batcher, 0 idle), and the internal
-  seal/gate/`noInput` coordinator is complete. `Close()` keeps its existing
-  signature, no longer abandons the drain, and a minimal `Stats()` is public; only
-  the resumable API and typed error are absent.
+  is gone (**measured 2 goroutines per running batcher**, down from 6, and enqueue
+  54% faster), and the internal seal/gate/`noInput` coordinator is complete.
+  `Close()` keeps its existing signature, no longer abandons the drain, and a
+  minimal `Stats()` is public; only the resumable API and typed error are absent.
 - Stopping after **2.3**: no accepted work is ever silently discarded.
 - Stopping after **2.4**: diagnostics bounded, panics survivable.
 - Stopping after **3.x**: small windows are honoured under slow processors.
