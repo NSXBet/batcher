@@ -291,11 +291,32 @@ and after shutdown it is a counted no-op rather than a panic.
 ```go
 s := b.Stats()
 
-// s.Queued        -> queue depth; the value to alert on
-// s.Pending       -> accepted work not yet finished, including in-flight batches
-// s.Rejected      -> refused enqueues
-// s.DroppedErrors -> diagnostics lost because Errors() was not drained
+// Where work currently is. These three are disjoint, so together they show
+// whether a backlog is waiting on the queue, on batching, or on the processor:
+//   s.Queued    -> published, not yet taken by the aggregator (alert on this)
+//   s.BatchHeld -> held by the aggregator: filling, or waiting for a free worker
+//   s.InFlight  -> inside a processor call
+
+// Totals.
+//   s.Pending        -> accepted work not yet finished, including in-flight batches
+//   s.Accepted       -> successful enqueues
+//   s.Rejected       -> refused enqueues
+//   s.Completed / s.Failed / s.Panicked -> mutually exclusive terminal outcomes
+//   s.BatchesFlushed -> batches emitted; Completed/BatchesFlushed is mean batch size
+//   s.DroppedErrors  -> diagnostics lost because Errors() was not drained
 ```
+
+`BatchesFlushed` is the coalescing signal when tuning `WithBatchInterval`: a mean
+batch size well below `BatchSize` means windows are closing on the timer rather than
+filling, so the interval is costing latency without buying batching.
+
+A rising `BatchHeld` with `InFlight` at its ceiling means batches are ready but every
+worker is busy — that is the signal to raise `WithConcurrency`, not to shrink the
+window.
+
+The snapshot is eventually consistent, not transactional: each field is read
+independently, so use it to observe where work sits, not as an accounting identity
+while load is in flight.
 
 ### Handling Errors
 
