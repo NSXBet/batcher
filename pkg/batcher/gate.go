@@ -121,11 +121,6 @@ func (g *admissionGate) empty() <-chan struct{} {
 	return g.emptyCh
 }
 
-// sealed reports whether admission is closed.
-func (g *admissionGate) isSealed() bool {
-	return g.sealed.Load()
-}
-
 // inGate reports how many publishers are inside the publication window.
 func (g *admissionGate) inGate() int64 {
 	return g.publishers.Load()

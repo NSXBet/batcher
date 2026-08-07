@@ -206,13 +206,13 @@ When you need to control the wait, or to keep waiting after a timeout, use
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
 
-if err := batcher.Shutdown(ctx); err != nil {
+if err := b.Shutdown(ctx); err != nil {
     var incomplete *batcher.ShutdownIncompleteError
     if errors.As(err, &incomplete) {
         // Still draining. Nothing was lost, and we can wait longer.
         log.Printf("%d items still pending", incomplete.Pending)
 
-        err = batcher.Shutdown(context.Background())
+        err = b.Shutdown(context.Background())
     }
 }
 ```
