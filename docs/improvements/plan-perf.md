@@ -882,7 +882,7 @@ introduces worker-pool dispatch and real concurrent processing.
   *within* each batch.
 - **Bounded dispatch:** the aggregator-to-worker handoff is unbuffered, so
   backpressure remains at admission and total accepted work stays bounded by
-  `N + BatchSize + (n × BatchSize)`. An unbounded dispatch queue would silently
+  `N + (1 + n) × BatchSize`. An unbounded dispatch queue would silently
   void the `MaxQueueSize` contract.
 - Add `Stats().InFlight`, tracked per worker, so the snapshot separates queued,
   batch-held, and in-flight work, and so the drain waits for active workers.
@@ -899,15 +899,22 @@ introduces worker-pool dispatch and real concurrent processing.
   handoff; n>1 aggregates independently until the **unbuffered** worker dispatch
   is unavailable; cross-batch ordering is not guaranteed at n>1.
 
-  The implementation was measured directly at 10k items/s with a 50ms processor
-  and a 5ms window: n=1 p50 70ms / mean batch 476; n=2 p50 25ms / 244; n=4 p50
-  15ms / 123; n=8 p50 4ms / 62. The exact milliseconds are host-sensitive, but
-  the direction is the contract: worker capacity reduces processor-bound latency
-  by flushing smaller batches more often. With a 100ms window and a 20ms processor
-  (timer-bound rather than processor-bound), n=1 and n=4 both measured ~70ms p50,
-  which is the control showing concurrency does not alter the batching rule.
+  The implementation was measured at 10k items/s with a 50ms processor and a 5ms
+  window on **darwin/arm64, Apple M4 Pro, GOMAXPROCS=12, Go 1.26.5**: n=1 p50 70ms
+  / mean batch 476; n=2 p50 25ms / 244; n=4 p50 15ms / 123; n=8 p50 4ms / 62.
+
+  Treat the ratio between rows as the finding and the absolute values as this
+  host's. A re-run on the same machine under different load measured n=1 p50 120ms
+  and n=8 p50 54ms — the same direction, roughly 2x rather than 17x. Anything
+  quoting a single multiplier out of this table will be wrong somewhere else, which
+  is why the tests assert only the relative ordering (`n>1` p50 below `n=1` p50)
+  and never a millisecond threshold.
+
+  With a 100ms window and a 20ms processor (timer-bound rather than
+  processor-bound), n=1 and n=4 both measured ~70ms p50, which is the control
+  showing concurrency does not alter the batching rule.
 - Total accepted-but-not-terminal items never exceed
-  `N + BatchSize + (n × BatchSize) + PublishersInGate` under a blocked processor;
+  `N + (1 + n) × BatchSize + PublishersInGate` under a blocked processor;
   the test records `PublishersInGate` separately and demonstrates that its maximum
   equals the number of intentionally parked publisher goroutines.
 - **Worker-mode drain test:** shutdown while a full batch is in flight on a busy

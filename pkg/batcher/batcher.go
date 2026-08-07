@@ -283,7 +283,9 @@ func (b *Batcher[T]) Errors() <-chan error {
 //   - The channel is unbuffered, so back-pressure stays at admission. A buffered
 //     dispatch queue would silently void the MaxQueueSize contract by holding
 //     batches nobody counted, so accepted-but-unfinished work stays bounded by
-//     MaxQueueSize + BatchSize + (Concurrency × BatchSize) + publishers in the gate.
+//     MaxQueueSize + (1 + Concurrency) × BatchSize + publishers in the gate. The
+//     leading batch is the one the aggregator holds after it leaves the queue; the
+//     Concurrency term is the batches inside processors.
 //
 // At Concurrency 1 there is exactly one worker, so the processor is never invoked
 // concurrently and batches are processed in publication order. Above 1 the caller

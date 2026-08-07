@@ -159,7 +159,8 @@ func TestConcurrencyPreservesOrderWithinEachBatch(t *testing.T) {
 //
 // A buffered dispatch channel would hold batches nobody accounted for, silently
 // voiding MaxQueueSize. The bound is
-// MaxQueueSize + BatchSize + (n × BatchSize) + PublishersInGate, and the test
+// MaxQueueSize + (1 + n) × BatchSize + PublishersInGate -- the leading batch is the
+// aggregator's held batch, the n term is batches inside processors -- and the test
 // records PublishersInGate separately so the terms stay distinguishable.
 func TestUnbufferedDispatchKeepsAcceptedWorkBounded(t *testing.T) {
 	t.Parallel()
@@ -235,7 +236,7 @@ func TestUnbufferedDispatchKeepsAcceptedWorkBounded(t *testing.T) {
 
 		require.LessOrEqual(t, stats.Pending, limit,
 			"accepted-but-unfinished work must stay within "+
-				"MaxQueueSize + BatchSize + n*BatchSize + PublishersInGate = %d "+
+				"MaxQueueSize + (1+n)*BatchSize + PublishersInGate = %d "+
 				"(pending=%d queued=%d inflight=%d gate=%d)",
 			limit, stats.Pending, stats.Queued, stats.InFlight, stats.PublishersInGate)
 

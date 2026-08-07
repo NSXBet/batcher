@@ -228,9 +228,15 @@ processed in publication order. Use this default when the processor holds
 unsynchronised state or when cross-batch ordering matters.
 
 A slow processor can make a small batch window ineffective at this setting: a 5ms
-window behind a 50ms processor is effectively bounded by the processor. When the
-processor is goroutine-safe and cross-batch ordering does not matter, explicitly
-opt into worker concurrency:
+window behind a 50ms processor is effectively bounded by the processor.
+
+The per-item worst case is additive, not a maximum. The interval timer starts when a
+batch takes its first item, so while the aggregator is blocked handing the previous
+batch to the busy worker no timer is running. An item arriving in that window waits
+the remaining processor time *plus* a full interval.
+
+When the processor is goroutine-safe and cross-batch ordering does not matter,
+explicitly opt into worker concurrency:
 
 ```go
 b := batcher.New(

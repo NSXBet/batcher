@@ -111,9 +111,15 @@ func WithErrorBufferSize[T any](size int) Option[T] {
 // discovered in production. See WithoutOrderedProcessing for what is given up.
 //
 // Concurrency above 1 is what stops a slow processor from bounding the effective
-// batch interval. At n = 1 the interval is effectively
-// max(BatchInterval, processor duration), because one batch must finish before
-// the next can start.
+// batch interval. At n = 1 the steady-state flush interval is
+// max(BatchInterval, processor duration), because one batch must finish before the
+// next can start.
+//
+// Per-item worst case is worse than that maximum, and additive rather than a
+// maximum. While the aggregator is blocked handing a batch to the busy worker, the
+// interval timer is not running: it is armed only when the next batch takes its
+// first item. An item that arrives during the blocked window therefore waits the
+// remaining processor time *plus* a full BatchInterval.
 func WithConcurrency[T any](concurrency int) Option[T] {
 	return func(b *Batcher[T]) {
 		if concurrency < 1 {
