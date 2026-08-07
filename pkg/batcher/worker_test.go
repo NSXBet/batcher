@@ -171,9 +171,17 @@ func TestUnbufferedDispatchKeepsAcceptedWorkBounded(t *testing.T) {
 		parked       = 5
 	)
 
-	// Closed once, at the end, to release both the workers and the parked
-	// publishers.
+	// Released via t.Cleanup, guarded by sync.Once, so a failing assertion cannot
+	// strand the parked workers and publishers. t.FailNow exits the test goroutine,
+	// so anything left to the end of the function body would never run and a clean
+	// assertion failure would become a package-level timeout.
 	release := make(chan struct{})
+
+	var releaseOnce sync.Once
+
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+
+	t.Cleanup(releaseAll)
 
 	b := batcher.New(unorderedBatcher[int](workers,
 		batcher.WithBatchSize[int](batchSize),
@@ -212,6 +220,8 @@ func TestUnbufferedDispatchKeepsAcceptedWorkBounded(t *testing.T) {
 		}
 	}
 
+	t.Cleanup(func() { _ = b.Close() })
+
 	limit := int64(maxQueueSize + batchSize + workers*batchSize + parked)
 
 	maxObservedGate := int64(0)
@@ -235,7 +245,7 @@ func TestUnbufferedDispatchKeepsAcceptedWorkBounded(t *testing.T) {
 	require.LessOrEqual(t, maxObservedGate, int64(parked),
 		"publishers in the gate must not exceed the goroutines intentionally parked")
 
-	close(release)
+	releaseAll()
 	wg.Wait()
 }
 
@@ -258,6 +268,14 @@ func TestShutdownWaitsForActiveWorkers(t *testing.T) {
 
 	started := make(chan struct{}, items)
 	release := make(chan struct{})
+
+	var releaseOnce sync.Once
+
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+
+	// Registered before the assertions below: two of them call t.Fatalf, which would
+	// otherwise leave four workers and the Shutdown goroutine parked forever.
+	t.Cleanup(releaseAll)
 
 	b := batcher.New(unorderedBatcher[int](workers,
 		batcher.WithBatchSize[int](batchSize),
@@ -298,7 +316,7 @@ func TestShutdownWaitsForActiveWorkers(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	close(release)
+	releaseAll()
 
 	select {
 	case err := <-shutdownDone:

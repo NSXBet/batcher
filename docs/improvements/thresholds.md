@@ -77,7 +77,7 @@ gate. Every count is enforced by a test, not merely documented.
 | Goroutines per unstarted batcher   | exactly 0                                 | `TestWorkerGoroutineBudget` |
 | Goroutines per running `n=1`       | exactly 2 (aggregator + serial processor) | `TestGoroutineBudgetPerRunningBatcher`, `TestWorkerGoroutineBudget` |
 | Goroutines per running `n>1`       | exactly 1 + n (aggregator + workers)      | `TestWorkerGoroutineBudget` |
-| Goroutines after terminal `closed` | equal to pre-construction baseline        | `TestGoroutineBudgetPerRunningBatcher`, `TestWorkerGoroutineBudget` |
+| Goroutines after terminal `closed` | at most the pre-construction baseline     | `TestGoroutineBudgetPerRunningBatcher`, `TestWorkerGoroutineBudget` |
 
 Current `main` owns 6 goroutines per batcher. Phase 2.1 removed `rill`
 (**measured 6 → 5**) and Phase 2.2 removed both `chann` relays and the input

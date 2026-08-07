@@ -244,9 +244,25 @@ func Run(cfg Config) Result {
 		completedItems  atomic.Int64
 		completedSignal = make(chan struct{}, 1)
 
-		procRNG = rand.New(rand.NewSource(cfg.Seed))
-		start   time.Time
+		// procRNG is guarded because BatcherOptions may enable worker concurrency,
+		// and math/rand.Rand is not goroutine-safe. JitteredProcessor and
+		// SlowOutlierProcessor read it from inside the processor, so several workers
+		// can call it at once; the matrix sweep does exactly that. Without the mutex
+		// the race detector fires in math/rand.(*rngSource).Uint64 and the service
+		// times become undefined, which would silently invalidate the measurement.
+		procRNGMu sync.Mutex
+		procRNG   = rand.New(rand.NewSource(cfg.Seed))
+		start     time.Time
 	)
+
+	// serviceTime keeps the lock around the RNG read only, not around the sleep, so
+	// concurrent workers still overlap their simulated downstream latency.
+	serviceTime := func(batchSize int) time.Duration {
+		procRNGMu.Lock()
+		defer procRNGMu.Unlock()
+
+		return cfg.Processor.ServiceTime(procRNG, batchSize)
+	}
 
 	options := []batcher.Option[Item]{
 		batcher.WithBatchSize[Item](cfg.BatchSize),
@@ -254,7 +270,7 @@ func Run(cfg Config) Result {
 		batcher.WithProcessor(func(items []Item) error {
 			procStart := int64(time.Since(start))
 
-			if d := cfg.Processor.ServiceTime(procRNG, len(items)); d > 0 {
+			if d := serviceTime(len(items)); d > 0 {
 				time.Sleep(d)
 			}
 

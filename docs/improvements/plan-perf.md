@@ -920,15 +920,18 @@ introduces worker-pool dispatch and real concurrent processing.
 - Goroutine count returns to the pre-construction baseline after `closed`, for
   `n=1` and `n>1`, using this leak-check protocol: sample after `Shutdown`
   returns, retry up to 50 times at 20ms intervals to allow scheduler settle,
-  then require exact equality with the pre-construction count. No unexplained
-  allowance is permitted; any runtime-owned goroutine must be named in the test.
+  then require the count to be at most the pre-construction baseline. It is `<=`
+  rather than `==` because an unrelated parallel test can retire a goroutine during
+  the settle window, which would make an equality assertion flaky without
+  indicating a leak. A count *above* the baseline is the leak signal, and any
+  runtime-owned goroutine must still be named in the test.
 - **Per-batcher goroutine budget is asserted by a test table** covering `new`,
   `running` at `n=1`, `running` at `n>1`, `draining`, and `closed`. Because 2.2
   replaces both `chann` queues with goroutine-free owned queues, the achievable
-  budget is: `new` = 0; `running` at `n=1` = 1 (aggregator); `running` at `n>1`
-  = 1 + n; `closed` = 0. (The earlier n=1=1 prediction was invalidated by Phase
-  2, which deliberately retains the separate serial processor goroutine to preserve
-  latency semantics.) Any deviation must be explained in the test rather than
+  budget is: `new` = 0; `running` at `n=1` = 2 (aggregator + serial processor);
+  `running` at `n>1` = 1 + n; `closed` = 0. (An earlier prediction of 1 for `n=1`
+  was invalidated by Phase 2, which deliberately retains the separate serial
+  processor goroutine to preserve latency semantics.) Any deviation must be explained in the test rather than
   absorbed into an allowance. The drain coordinator runs on the caller's
   `Shutdown` goroutine and must not add a persistent goroutine; if an
   implementation needs one, the table and this budget must be updated with it

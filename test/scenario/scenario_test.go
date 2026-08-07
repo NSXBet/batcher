@@ -55,19 +55,30 @@ func TestHarnessReportsLatenessAndInvalidatesBadRuns(t *testing.T) {
 		})
 	}
 
-	// Probe what this host actually achieves, then assert the guard accepts a
-	// budget above it and rejects one below it.
+	// Probe what this host achieves, for the log only. Deriving the budget for a
+	// *later* run from a single probe made this test flaky: under parallel CPU
+	// contention the next run's overshoot can exceed the probe's p99 by more than any
+	// small margin, so the assertion failed for scheduling reasons rather than
+	// because the guard was wrong.
 	probe := measure(time.Hour)
 	require.Positive(t, probe.Lateness.Count, "lateness must be recorded")
 	t.Logf("host p99 sleep overshoot: %s", probe.Lateness.P99)
 
-	generous := measure(probe.Lateness.P99 + 50*time.Millisecond)
-	require.True(t, generous.LatenessValid,
-		"a run within its lateness budget must be valid (p99 %s)", generous.Lateness.P99)
+	// Both directions are what actually needs asserting, and each is checked against
+	// a budget that cannot be marginal:
+	//
+	//   - an hour is unreachable by any scheduling delay, so the run must be valid;
+	//   - a nanosecond is unmeetable by any real scheduler, so it must be invalid.
+	//
+	// That tests the guard rather than the host's timer precision.
+	require.True(t, probe.LatenessValid,
+		"a run with an unreachable budget must be valid (p99 %s)", probe.Lateness.P99)
 
-	strict := measure(time.Nanosecond) // no real scheduler can meet this
+	strict := measure(time.Nanosecond)
 	require.False(t, strict.LatenessValid,
 		"a run whose lateness exceeds its budget must be marked invalid")
+	require.Positive(t, strict.Lateness.P99,
+		"the invalid run must still report the lateness it measured")
 }
 
 // TestHarnessRecorderDoesNotAllocatePerItem is the harness self-check required

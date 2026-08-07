@@ -16,6 +16,8 @@ func TestCanCreateBatcherWithDefaultConfig(t *testing.T) {
 	// ACT
 	b := batcher.New[test.BatchItem]()
 
+	t.Cleanup(func() { _ = b.Close() })
+
 	var (
 		expected batcher.Processor[test.BatchItem]
 		actual   batcher.Processor[test.BatchItem]
@@ -44,6 +46,8 @@ func TestCanCreateBatcher(t *testing.T) {
 		batcher.WithBatchInterval[test.BatchItem](1*time.Second),
 	)
 
+	t.Cleanup(func() { _ = b.Close() })
+
 	// ASSERT
 	require.NotNil(t, b)
 	require.Equal(t, 1000, b.Config().BatchSize)
@@ -53,6 +57,8 @@ func TestCanCreateBatcher(t *testing.T) {
 func TestCanAddItemsToBatch(t *testing.T) {
 	// ARRANGE
 	b := batcher.New[test.BatchItem]()
+
+	t.Cleanup(func() { _ = b.Close() })
 
 	// ACT
 	b.Add(test.BatchItem{})
@@ -64,6 +70,8 @@ func TestCanAddItemsToBatch(t *testing.T) {
 func TestCanProcessItemsWithNoOp(t *testing.T) {
 	// ARRANGE
 	b := batcher.New[test.BatchItem]()
+
+	t.Cleanup(func() { _ = b.Close() })
 
 	// ACT
 	for i := 0; i < 1000; i++ {
@@ -89,6 +97,8 @@ func TestCanProcessItemsWithCustomProcessor(t *testing.T) {
 		batcher.WithBatchInterval[test.BatchItem](1*time.Millisecond),
 	)
 
+	t.Cleanup(func() { _ = b.Close() })
+
 	// ACT
 	for i := 0; i < 1000; i++ {
 		b.Add(test.BatchItem{Key: fmt.Sprintf("key_%d", i)})
@@ -112,6 +122,8 @@ func TestCanProcessItemsWithStructProcessor(t *testing.T) {
 		batcher.WithProcessor(processor.Process),
 		batcher.WithBatchInterval[test.BatchItem](1*time.Millisecond),
 	)
+
+	t.Cleanup(func() { _ = b.Close() })
 
 	// ACT
 	for i := 0; i < 1000; i++ {
@@ -137,6 +149,8 @@ func TestCanAddManyMoreItemsThanBatchSize(t *testing.T) {
 		}),
 		batcher.WithBatchInterval[test.BatchItem](1*time.Millisecond),
 	)
+
+	t.Cleanup(func() { _ = b.Close() })
 
 	// ACT
 	for i := 0; i < 100000; i++ {
@@ -247,6 +261,8 @@ func TestProcessesEntireBatchesIfTimerHasNotExpired(t *testing.T) {
 			return nil
 		}),
 	)
+
+	t.Cleanup(func() { _ = b.Close() })
 
 	// ACT
 	for range 10 {

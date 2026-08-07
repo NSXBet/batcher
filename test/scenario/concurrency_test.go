@@ -2,6 +2,7 @@ package scenario_test
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -57,6 +58,7 @@ func TestConcurrencyRemovesSlowProcessorCoupling(t *testing.T) {
 			Arrival:        scenario.Steady(rate, duration),
 			Processor:      scenario.FixedProcessor(serviceTime),
 			BatcherOptions: concurrencyOptions(workers),
+			Producers:      runtime.NumCPU(),
 			LatenessBudget: time.Second,
 		})
 	}
@@ -125,6 +127,7 @@ func TestSemanticDifferenceMatrix(t *testing.T) {
 				Arrival:        scenario.Steady(rate, duration),
 				Processor:      scenario.FixedProcessor(serviceTime),
 				BatcherOptions: concurrencyOptions(workers),
+				Producers:      runtime.NumCPU(),
 				LatenessBudget: time.Second,
 			}),
 		})
@@ -186,6 +189,7 @@ func TestConcurrencyDoesNotHelpWhenNotProcessorBound(t *testing.T) {
 			Arrival:        scenario.Steady(rate, duration),
 			Processor:      scenario.FixedProcessor(serviceTime),
 			BatcherOptions: concurrencyOptions(workers),
+			Producers:      runtime.NumCPU(),
 			LatenessBudget: time.Second,
 		})
 	}
@@ -195,6 +199,9 @@ func TestConcurrencyDoesNotHelpWhenNotProcessorBound(t *testing.T) {
 
 	t.Logf("n=1  p50=%s mean_batch=%.0f", serial.EndToEnd.P50, serial.MeanBatchSize)
 	t.Logf("n=4  p50=%s mean_batch=%.0f", concurrent.EndToEnd.P50, concurrent.MeanBatchSize)
+
+	require.False(t, serial.TimedOut, "serial run must complete")
+	require.False(t, concurrent.TimedOut, "concurrent run must complete")
 
 	// The window dominates, so both should sit near it. Allow a generous margin:
 	// the point is that concurrency does not change the regime, not that timing is
@@ -223,17 +230,29 @@ func TestConcurrencyMatrixReport(t *testing.T) {
 			10 * time.Millisecond,
 			100 * time.Millisecond,
 		} {
-			results = append(results, scenario.Run(scenario.Config{
+			result := scenario.Run(scenario.Config{
 				Name:           "n=" + itoa(workers),
 				BatchSize:      1_000,
 				BatchInterval:  window,
 				Arrival:        scenario.Steady(10_000, 2*time.Second),
 				Processor:      scenario.FixedProcessor(20 * time.Millisecond),
 				BatcherOptions: concurrencyOptions(workers),
+				Producers:      runtime.NumCPU(),
 				Warmup:         200 * time.Millisecond,
 				Seed:           1,
 				LatenessBudget: 2 * time.Millisecond,
-			}))
+			})
+
+			// A run that gave up waiting has not measured steady-state behaviour, so
+			// reporting it as evidence would be misleading.
+			if result.TimedOut {
+				t.Errorf("n=%d window=%s timed out; excluded from the report",
+					workers, window)
+
+				continue
+			}
+
+			results = append(results, result)
 		}
 	}
 
