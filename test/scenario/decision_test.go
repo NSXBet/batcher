@@ -115,7 +115,7 @@ func TestDefaultWindowUnderSustainedOverload(t *testing.T) {
 	t.Logf("offered=%d/s processor=%s (deliberately saturated)", rate, serviceTime)
 	t.Logf("")
 	t.Logf("%-8s %-12s %-12s %-12s %-11s %-10s %s",
-		"window", "accepted/s", "completed/s", "pending_peak", "heap_peak", "calls/s", "batch")
+		"window", "accepted/s", "completed/s", "work_peak", "heap_peak", "calls/s", "batch")
 
 	for _, window := range []time.Duration{
 		time.Millisecond,
@@ -138,7 +138,7 @@ func TestDefaultWindowUnderSustainedOverload(t *testing.T) {
 			window,
 			result.AcceptedRate,
 			result.CompletedRate,
-			result.PendingPeak,
+			result.PendingWorkPeak,
 			formatMB(result.HeapHighWater),
 			result.DownstreamPerSec,
 			result.MeanBatchSize)
