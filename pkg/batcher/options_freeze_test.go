@@ -88,3 +88,59 @@ func TestOptionsAreFrozenAfterNew(t *testing.T) {
 	require.Zero(t, mutatedCalls.Load(),
 		"a post-start WithProcessor must not replace the original")
 }
+
+// TestEveryOptionRespectsTheFreeze covers the frozen-config early return in each
+// option individually.
+//
+// TestOptionsAreFrozenAfterNew proves the guard works under concurrent load, but it
+// exercises only the options it applies. This table walks every option, so adding a
+// new one without the guard shows up as a coverage and assertion gap rather than as
+// a data race discovered later.
+func TestEveryOptionRespectsTheFreeze(t *testing.T) {
+	t.Parallel()
+
+	b := batcher.New(
+		batcher.WithBatchSize[test.BatchItem](64),
+		batcher.WithBatchInterval[test.BatchItem](7*time.Millisecond),
+		batcher.WithMaxQueueSize[test.BatchItem](128),
+		batcher.WithCloseGrace[test.BatchItem](11*time.Second),
+		batcher.WithErrorBufferSize[test.BatchItem](32),
+		batcher.WithProcessor(batcher.NoOpProcessor[test.BatchItem]),
+	)
+
+	defer func() { require.NoError(t, b.Close()) }()
+
+	before := b.Config()
+
+	// Every option, applied post-construction, must be inert.
+	for _, option := range []batcher.Option[test.BatchItem]{
+		batcher.WithBatchSize[test.BatchItem](1),
+		batcher.WithBatchInterval[test.BatchItem](time.Hour),
+		batcher.WithMaxQueueSize[test.BatchItem](1),
+		batcher.WithCloseGrace[test.BatchItem](time.Nanosecond),
+		batcher.WithErrorBufferSize[test.BatchItem](1),
+		batcher.WithConcurrency[test.BatchItem](16),
+		batcher.WithoutOrderedProcessing[test.BatchItem](),
+		batcher.WithSkipAutoStart[test.BatchItem](),
+		batcher.WithProcessor(batcher.NoOpProcessor[test.BatchItem]),
+	} {
+		option(b)
+	}
+
+	after := b.Config()
+
+	// Config contains a function field, which Go cannot compare for equality even
+	// when it is the same function. Assert every scalar explicitly and prove the
+	// processor remains callable below.
+	require.Equal(t, before.SkipAutoStart, after.SkipAutoStart)
+	require.Equal(t, before.BatchSize, after.BatchSize)
+	require.Equal(t, before.BatchInterval, after.BatchInterval)
+	require.Equal(t, before.Concurrency, after.Concurrency)
+	require.Equal(t, before.MaxQueueSize, after.MaxQueueSize)
+	require.Equal(t, before.CloseGrace, after.CloseGrace)
+	require.Equal(t, before.ErrorBufferSize, after.ErrorBufferSize)
+	require.Equal(t, before.UnorderedProcessingAcknowledged, after.UnorderedProcessingAcknowledged)
+	require.NotNil(t, after.ProcessorFunc,
+		"post-construction WithProcessor must not replace the original processor")
+	require.NoError(t, after.ProcessorFunc(nil))
+}
