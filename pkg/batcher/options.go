@@ -4,6 +4,16 @@ import (
 	"time"
 )
 
+// Option configures a Batcher during New.
+//
+// Options are construction-time only. New applies them, validates the resulting
+// configuration, and freezes it before any processing goroutine can start. Calling
+// an Option on a Batcher after New returns is a deliberate no-op: runtime
+// reconfiguration was never coherent (the pipeline snapshots its configuration at
+// start), and allowing it would reintroduce races against workers.
+//
+// To change configuration, construct a new Batcher. In particular, WithSkipAutoStart
+// delays lifecycle start; it does not leave the configuration mutable until Start.
 type Option[T any] func(*Batcher[T])
 
 // WithProcessor sets the processor function to be called for each batch.
@@ -47,7 +57,11 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 	}
 }
 
-// WithSkipAutoStart skips the automatic start of the batcher.
+// WithSkipAutoStart skips automatic lifecycle start.
+//
+// It does not defer configuration freeze: options are still applied only during New.
+// Call Start when ready to process, or Shutdown to drain queued work without an
+// explicit Start.
 func WithSkipAutoStart[T any]() Option[T] {
 	return func(b *Batcher[T]) {
 		if b.configFrozen.Load() {

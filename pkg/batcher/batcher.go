@@ -48,6 +48,11 @@ type Batcher[T any] struct {
 	// BatchSize, BatchInterval or ProcessorFunc after New returns.
 	configFrozen atomic.Bool
 
+	// runtime is the immutable snapshot the processing goroutines use. It is taken
+	// in New, before any goroutine exists, so no worker ever reads the Config
+	// struct a caller may still hold a reference to.
+	runtime runtimeConfig[T]
+
 	gate     *admissionGate
 	counters counters
 
@@ -74,6 +79,19 @@ type Batcher[T any] struct {
 	// same as abandoning it.
 	shutdownOnce sync.Once
 	shutdownDone chan struct{}
+}
+
+// runtimeConfig is the frozen view of Config that processing goroutines read.
+//
+// Config is a plain struct and callers can hold a reference to one, so reading it
+// from a worker is a data race by construction. Copying the fields the pipeline
+// needs, once, before any goroutine starts, removes that whole class rather than
+// relying on every read site to remember to use a local.
+type runtimeConfig[T any] struct {
+	batchSize     int
+	batchInterval time.Duration
+	workers       int
+	processor     Processor[T]
 }
 
 // New creates a new Batcher with the given options.
@@ -104,6 +122,25 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	// constructed with WithSkipAutoStart. SkipAutoStart controls lifecycle, not
 	// whether the configuration is still mutable.
 	b.configFrozen.Store(true)
+
+	b.runtime = runtimeConfig[T]{
+		batchSize:     b.config.BatchSize,
+		batchInterval: b.config.BatchInterval,
+		workers:       b.config.Concurrency,
+		processor:     b.config.ProcessorFunc,
+	}
+
+	if b.runtime.batchSize < 1 {
+		b.runtime.batchSize = DefaultBatchSize
+	}
+
+	if b.runtime.workers < 1 {
+		b.runtime.workers = 1
+	}
+
+	if b.runtime.processor == nil {
+		b.runtime.processor = NoOpProcessor[T]
+	}
 
 	b.input = newQueue[T](b.config.MaxQueueSize)
 	b.errorsChan = make(chan error, b.config.ErrorBufferSize)
@@ -316,25 +353,16 @@ func (b *Batcher[T]) Errors() <-chan error {
 func (b *Batcher[T]) run() {
 	defer close(b.stopped)
 
-	// Snapshot the configuration once, at start, and use only the snapshot from here
-	// on. Config is a plain struct the caller still holds a pointer to, so reading it
-	// per batch races with any option applied after Start. Freezing it also matches
-	// the semantics callers already rely on: batch size and interval are fixed for
-	// the lifetime of a running batcher, so re-reading them could never have taken
-	// effect coherently mid-batch anyway.
+	// Use the immutable runtime snapshot taken by New before any goroutine starts.
+	// In particular, ProcessorFunc is passed to workers rather than dereferenced
+	// from Config per batch. This keeps every processing read off the mutable Config
+	// struct, so a caller with a stale reference cannot race the pipeline.
 	var (
-		batchSize     = b.config.BatchSize
-		batchInterval = b.config.BatchInterval
-		workers       = b.config.Concurrency
+		batchSize     = b.runtime.batchSize
+		batchInterval = b.runtime.batchInterval
+		workers       = b.runtime.workers
+		processor     = b.runtime.processor
 	)
-
-	if batchSize < 1 {
-		batchSize = DefaultBatchSize
-	}
-
-	if workers < 1 {
-		workers = 1
-	}
 
 	batches := make(chan []T)
 
@@ -347,7 +375,7 @@ func (b *Batcher[T]) run() {
 			defer processing.Done()
 
 			for items := range batches {
-				b.process(items)
+				b.process(processor, items)
 			}
 		}()
 	}
@@ -478,7 +506,7 @@ func (b *Batcher[T]) run() {
 // The ordering is fixed and load-bearing: whatever happens, exactly one terminal
 // category is counted and the drain obligation is released exactly once. Leaving it
 // unreleased would inflate Pending permanently and hang shutdown forever.
-func (b *Batcher[T]) process(items []T) {
+func (b *Batcher[T]) process(processor Processor[T], items []T) {
 	b.counters.inFlight.Add(int64(len(items)))
 
 	outcome := outcomeCompleted
@@ -503,7 +531,7 @@ func (b *Batcher[T]) process(items []T) {
 		})
 	}()
 
-	if err := b.config.ProcessorFunc(items); err != nil {
+	if err := processor(items); err != nil {
 		outcome = outcomeFailed
 
 		b.publishError(err)
