@@ -22,7 +22,7 @@ downstream work happened.
 
 ## Environment
 
-```
+```text
 go=go1.26.5 os=darwin arch=arm64 gomaxprocs=12 cpus=12
 ```
 
@@ -173,17 +173,25 @@ This is a **behaviour change for every caller who did not set `WithBatchInterval
 
 | Situation | Effect | Action |
 | --- | --- | --- |
-| Sets `WithBatchInterval` explicitly | None | None |
+| Sets `WithBatchInterval` to a **positive** value | None | None |
+| Passes `WithBatchInterval(0)` or a negative duration | Falls back to `DefaultBatchInterval`, so it moves 1s → 10ms with everyone else | Pass an explicit positive interval if you relied on the old 1s fallback |
 | Relies on the 1s default, traffic ≥ 10k/s | None measurable — `BatchSize` was already the binding constraint | None |
 | Relies on the 1s default, sparse traffic | Latency drops sharply; downstream call rate rises | Verify the new call rate is acceptable; set a larger interval if not |
 | Depends on ~1000-item batches at low traffic | Batches become much smaller | Set `WithBatchInterval` explicitly, or raise `BatchSize` |
 
-`Stats().BatchesFlushed` with `Completed` gives mean batch size, which is the
-fastest way to confirm what the change did to your own coalescing:
+`Stats().BatchesFlushed` with the terminal counters gives mean batch size after a
+drain, which is the fastest way to confirm what the change did to your own
+coalescing:
 
 ```go
 s := b.Stats()
-meanBatch := float64(s.Completed) / float64(s.BatchesFlushed)
+
+// Include every terminal outcome: a failed or panicked batch was still flushed, so
+// dividing by Completed alone undercounts whenever the processor errors.
+if s.BatchesFlushed > 0 {
+    meanBatch := float64(s.Completed+s.Failed+s.Panicked) / float64(s.BatchesFlushed)
+    log.Printf("mean batch size: %.1f", meanBatch)
+}
 ```
 
 ## What would reverse this decision

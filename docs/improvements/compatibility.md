@@ -50,7 +50,7 @@ rather than synchronised.
 cfg := b.Config()
 size := cfg.BatchSize
 
-// After: identical to read, since Go auto-dereferences neither is needed.
+// After: Config() returns a value; read its fields directly, no pointer needed.
 size := b.Config().BatchSize
 
 // Before: mutate a running batcher (a data race, now impossible).
@@ -62,6 +62,54 @@ b = batcher.New(batcher.WithBatchSize[Item](500), batcher.WithProcessor(fn))
 
 Code that only *reads* `Config()` compiles unchanged. Code that assigned through it
 will now fail to compile, which is the intended outcome: it was racing.
+
+### `DefaultBatchInterval` changes 1s → 10ms
+
+| | |
+| --- | --- |
+| **Before** | `DefaultBatchInterval = 1 * time.Second` |
+| **After** | `DefaultBatchInterval = 10 * time.Millisecond` |
+
+This affects every caller that did not set `WithBatchInterval`, and it is a
+behaviour change rather than a bug fix: batches close sooner, so latency drops and
+the downstream call rate rises whenever `BatchSize` is not reached first.
+
+The decision and its full measurement matrix are in
+[`default-window.md`](./default-window.md). In short: at 1,000 items/s the old
+default measured p99 981ms; 10ms measured p99 12ms while still coalescing ~11 items
+per batch.
+
+**Who is affected:**
+
+| Situation | Effect | Action |
+| --- | --- | --- |
+| Sets a **positive** `WithBatchInterval` | None | None |
+| Passes `WithBatchInterval(0)` or a negative value | Falls back to the default, so it moves to 10ms too | Pass an explicit positive interval to keep 1s |
+| Relies on the default, traffic ≥ 10k/s | None measurable — `BatchSize` was already binding | None |
+| Relies on the default, sparse traffic | Latency drops sharply; more downstream calls | Confirm the new call rate is acceptable |
+| Depends on ~1000-item batches at low traffic | Batches become much smaller | Set `WithBatchInterval` explicitly, or raise `BatchSize` |
+
+**Migration:**
+
+```go
+// Keep the previous behaviour explicitly.
+b := batcher.New(
+    batcher.WithProcessor(fn),
+    batcher.WithBatchInterval[Item](time.Second),
+)
+```
+
+Note that shrinking the interval is **not** overload protection, and neither is
+keeping it large: under a saturated downstream every interval from 10ms to 1s
+accepted the same load. If the concern is memory rather than latency, bound the
+queue instead:
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(fn),
+    batcher.WithMaxQueueSize[Item](10_000), // back-pressure, reported via Enqueue
+)
+```
 
 ### `DefaultConcurrency` changes 3 → 1, and `Concurrency` now works
 
@@ -183,7 +231,7 @@ Fx stop-hook behaviour:
 | Normal drain | `nil` |
 | Stop context expires | `*ShutdownIncompleteError` as an Fx lifecycle error; drain continues |
 | Batcher never started but holds queued work | Drains; `Shutdown` starts a consumer when one is needed |
-| Repeated stop | Idempotent; later calls observe the same terminal result |
+| Repeated stop | Idempotent: later calls wait on the same drain and return their own wait result, so a caller that waits long enough gets `nil` even if an earlier caller timed out |
 
 ## Clarified contracts (no code change required)
 

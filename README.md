@@ -363,17 +363,22 @@ the timer starts when the first item enters an empty batch. Sparse traffic there
 waits the full interval per item, and a request crossing several batching services
 pays up to one interval per hop.
 
-Expected batch size is approximately **arrival rate x interval**. That rule is
-measured, not estimated: at 10,000 items/s with a 10ms interval it predicts 100 items
-per batch, and the measured mean is 100.
+Expected batch size is approximately **min(arrival rate x interval, BatchSize)**.
+The arrival-rate term is measured, not estimated: at 10,000 items/s with a 10ms
+interval it predicts 100 items per batch, and the measured mean is 100.
 
-Use it to pick an interval from the coalescing you actually need:
+`BatchSize` is the binding constraint whenever it fills first, and the interval then
+never fires. With the default `BatchSize` of 1,000, a service at 50,000 items/s
+reaches 1,000 items after about 20ms, so configuring a 100ms interval changes nothing
+— which is exactly what the 50,000/s row below shows.
+
+Use the formula to pick an interval from the coalescing you actually need:
 
 | Arrival rate | 10ms (default) | 100ms |
 | --- | --- | --- |
 | 1,000/s | ~11 items/batch, ~94 calls/s, p99 ~12ms | ~100 items/batch, ~10 calls/s, p99 ~100ms |
 | 10,000/s | ~101 items/batch, ~99 calls/s, p99 ~10ms | ~1000 items/batch, ~10 calls/s, p99 ~99ms |
-| 50,000/s | ~500 items/batch, ~100 calls/s, p99 ~10ms | ~1000 items/batch, ~50 calls/s, p99 ~20ms |
+| 50,000/s | ~500 items/batch, ~100 calls/s, p99 ~10ms | ~1000 items/batch (capped by `BatchSize`), ~50 calls/s, p99 ~20ms |
 
 Raise the interval when your downstream is expensive enough that the call rate at
 10ms is unacceptable — most relevant below a few thousand items/s. The full matrix
@@ -397,7 +402,7 @@ items/s:
 
 The smaller interval is *worse*, because queueing dominates. If your processor is
 slow, raise `WithConcurrency` (with `WithoutOrderedProcessing`) rather than lowering
-the interval — with 8 workers the same scenario measured p50 4ms.
+the interval. With 8 workers, the same scenario measured a p50 latency of 4ms.
 
 ## FX Integration
 

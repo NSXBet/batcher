@@ -38,9 +38,9 @@ func ProvideBatcherInFX[T any](
 // ProvideBatcherInFXWithOptions wires a Batcher into an Fx application with the
 // full option set.
 //
-// The processor comes from the injected factory, so callers must not pass
-// WithProcessor: it is applied first and then overridden by anything supplied
-// here, which would silently bypass dependency injection. Every other option
+// The processor always comes from the injected factory. A caller-supplied
+// WithProcessor is ignored rather than honoured: the injected processor is applied
+// last, so dependency injection cannot be bypassed by accident. Every other option
 // behaves exactly as it does with New.
 //
 // WithSkipAutoStart is always applied last and cannot be overridden, because Fx
@@ -53,10 +53,11 @@ func ProvideBatcherInFXWithOptions[T any](
 	return provideBatcherModule[T](
 		processorFactory,
 		func(processorFunc Processor[T]) []Option[T] {
-			// The injected processor goes first so an explicit WithProcessor in
-			// options would win. That is a caller mistake rather than something to
-			// silently correct, and it is documented above.
-			return append([]Option[T]{WithProcessor(processorFunc)}, options...)
+			// The injected processor goes LAST so it cannot be overridden. Placing it
+			// first meant a caller-supplied WithProcessor silently replaced it and
+			// bypassed dependency injection entirely — the documented restriction was
+			// not enforced, so the failure was invisible rather than loud.
+			return append(append([]Option[T]{}, options...), WithProcessor(processorFunc))
 		},
 	)
 }

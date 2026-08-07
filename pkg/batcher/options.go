@@ -47,8 +47,12 @@ func WithBatchSize[T any](batchSize int) Option[T] {
 // WithBatchInterval sets the maximum age of a partial batch.
 //
 // The timer starts when the first item enters an empty batch, so this is a per-item
-// worst-case wait for sparse traffic rather than a periodic flush tick. Expected
-// batch size is approximately arrival rate x interval.
+// worst-case wait for sparse traffic rather than a periodic flush tick.
+//
+// Under steady traffic, expected batch size is approximately
+// min(BatchSize, arrival rate x interval): the interval bounds how long a partial
+// batch waits, but BatchSize can flush it sooner. At high arrival rates the size
+// limit is the binding constraint and the interval never fires.
 //
 // A non-positive value falls back to DefaultBatchInterval.
 func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {

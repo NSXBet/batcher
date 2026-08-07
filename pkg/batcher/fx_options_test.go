@@ -309,3 +309,50 @@ func TestConfigSnapshotCannotMutateRunningBatcher(t *testing.T) {
 	require.Equal(t, int64(400), processed.Load(),
 		"every item must still be processed with the original configuration")
 }
+
+// TestProvideBatcherInFXWithOptionsIgnoresCallerProcessor pins that dependency
+// injection cannot be bypassed.
+//
+// The injected processor is applied last, so a caller-supplied WithProcessor is
+// ignored. Before this, options were applied after the injected processor and a
+// caller-supplied one silently replaced it: the documented restriction existed but
+// nothing enforced it, so the mistake produced a working app wired to the wrong
+// processor rather than an error.
+func TestProvideBatcherInFXWithOptionsIgnoresCallerProcessor(t *testing.T) {
+	t.Parallel()
+
+	var (
+		b         *batcher.Batcher[string]
+		processor *optionsProcessor
+		rogue     atomic.Int64
+	)
+
+	app := fxtest.New(t,
+		fx.Provide(newOptionsProcessor),
+		batcher.ProvideBatcherInFXWithOptions[string](
+			optionsProcessorFunc,
+			batcher.WithBatchSize[string](1),
+			batcher.WithBatchInterval[string](time.Millisecond),
+			// Deliberately competing with the injected processor.
+			batcher.WithProcessor(batcher.Processor[string](func(items []string) error {
+				rogue.Add(int64(len(items)))
+
+				return nil
+			})),
+		),
+		fx.Populate(&b, &processor),
+	)
+
+	app.RequireStart()
+
+	b.Add("routed-by-injection")
+
+	require.NoError(t, b.Join(10*time.Second))
+
+	app.RequireStop()
+
+	require.Equal(t, int64(1), processor.items.Load(),
+		"the injected processor must receive the item")
+	require.Zero(t, rogue.Load(),
+		"a caller-supplied WithProcessor must not override dependency injection")
+}
