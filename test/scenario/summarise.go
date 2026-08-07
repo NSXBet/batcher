@@ -19,6 +19,7 @@ func summarise(
 	goroutinesPeak int,
 	heapPeak uint64,
 	pendingPeak int64,
+	heapSamples int64,
 ) Result {
 	var (
 		lateness   []time.Duration
@@ -73,12 +74,12 @@ func summarise(
 
 	latenessDist := NewDistribution(lateness)
 
-	batchSizes := make([]time.Duration, 0, len(batches))
+	batchSizes := make([]int, 0, len(batches))
 	partial := 0
 	totalBatched := 0
 
 	for _, size := range batches {
-		batchSizes = append(batchSizes, time.Duration(size))
+		batchSizes = append(batchSizes, size)
 		totalBatched += size
 
 		if size < cfg.BatchSize {
@@ -96,10 +97,13 @@ func summarise(
 		seconds = runDuration.Seconds()
 	}
 
-	// Prefer the in-flight peak; fall back to the post-drain reading if the run
-	// was too short for the sampler to fire.
+	// Prefer the in-flight peak. Fall back to the post-drain reading only if the
+	// sampler never fired, and report that via HeapSampled so a caller can tell a
+	// real peak from a recovered-process number.
+	heapSampled := heapSamples > 0 && heapPeak > 0
+
 	heapHighWater := heapPeak
-	if heapHighWater == 0 {
+	if !heapSampled {
 		heapHighWater = memAfter.HeapAlloc
 	}
 
@@ -122,13 +126,15 @@ func summarise(
 		Batches:           len(batches),
 		MeanBatchSize:     meanBatch,
 		PartialBatches:    partial,
-		BatchSizes:        NewDistribution(batchSizes),
+		BatchSizeDist:     NewIntDistribution(batchSizes),
 		DownstreamPerSec:  float64(len(batches)) / runDuration.Seconds(),
 		AllocsPerItem:     allocsPerItem,
 		HeapHighWater:     heapHighWater,
-		PendingPeak:       pendingPeak,
+		HeapSampled:       heapSampled,
+		PendingWorkPeak:   pendingPeak,
 		GCCount:           memAfter.NumGC - memBefore.NumGC,
 		GCPauseTotal:      time.Duration(memAfter.PauseTotalNs - memBefore.PauseTotalNs),
+		GCDuringRun:       memAfter.NumGC > memBefore.NumGC,
 		GoroutinesPeak:    goroutinesPeak,
 		Duration:          runDuration,
 	}

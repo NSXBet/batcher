@@ -36,9 +36,17 @@ Two further measurements shape this plan:
   on `main` (~25-30% slower) and adds roughly 500µs at a 10ms window. It is
   worth landing for safety, but it must not be justified as a speed improvement.
 - **A smaller window provides no overload protection.** With a 2ms processor and
-  a saturating producer, 100ms, 10ms, and 1ms windows all accepted 1.8-2.4M
-  items and grew the heap 2.2-4.3GB within two seconds. Overload requires
-  bounded admission or upstream flow control.
+  a saturating producer, 100ms, 10ms, and 1ms windows all accepted 1.8-2.4M items
+  and grew the heap 2.2-4.3GB within two seconds. Overload requires bounded
+  admission or upstream flow control.
+
+  Those figures come from an unbounded exploratory probe that ran until it was
+  stopped. The pinned regression test
+  (`TestSmallWindowGivesNoOverloadProtection`) deliberately uses a much shorter
+  window and far fewer items, so it reports tens of megabytes rather than
+  gigabytes. Both measure the same property — accepted work accumulates without
+  bound regardless of interval — at different scales; the smaller numbers in test
+  output are not a contradiction.
 
 Additionally, three concurrency hazards were confirmed by targeted experiment
 and constrain the design rather than merely the tests:

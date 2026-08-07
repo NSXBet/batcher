@@ -117,3 +117,61 @@ func quantile(values []time.Duration, q float64) time.Duration {
 
 	return values[idx]
 }
+
+// IntDistribution summarises a set of counts, such as batch sizes.
+//
+// This exists rather than reusing Distribution because batch sizes are items, not
+// durations. Storing them as time.Duration to reuse one helper made a mean batch of
+// 455 print as "455ns" in any formatted output, which is the kind of unit confusion
+// that ends up quoted in a decision record.
+type IntDistribution struct {
+	Count int
+	Min   int
+	P50   int
+	P95   int
+	P99   int
+	Max   int
+	Mean  float64
+}
+
+// NewIntDistribution sorts values in place and summarises them.
+func NewIntDistribution(values []int) IntDistribution {
+	if len(values) == 0 {
+		return IntDistribution{}
+	}
+
+	sort.Ints(values)
+
+	total := 0
+	for _, v := range values {
+		total += v
+	}
+
+	return IntDistribution{
+		Count: len(values),
+		Min:   values[0],
+		P50:   intQuantile(values, 0.50),
+		P95:   intQuantile(values, 0.95),
+		P99:   intQuantile(values, 0.99),
+		Max:   values[len(values)-1],
+		Mean:  float64(total) / float64(len(values)),
+	}
+}
+
+// intQuantile expects values to be sorted ascending.
+func intQuantile(values []int, q float64) int {
+	if len(values) == 0 {
+		return 0
+	}
+
+	idx := int(float64(len(values)-1) * q)
+	if idx < 0 {
+		idx = 0
+	}
+
+	if idx >= len(values) {
+		idx = len(values) - 1
+	}
+
+	return values[idx]
+}

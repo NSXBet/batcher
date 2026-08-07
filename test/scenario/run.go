@@ -3,6 +3,7 @@ package scenario
 import (
 	"math/rand"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,9 +45,18 @@ type Config struct {
 	Arrival   Arrival
 	Processor Processor
 
-	// Producers is how many goroutines offer the schedule concurrently. The
-	// schedule is partitioned across them, so offered load is independent of
-	// producer count.
+	// Producers is how many goroutines offer the schedule concurrently.
+	//
+	// The schedule is partitioned round-robin, so the *set* of offer times is
+	// independent of producer count. Achieving them is not: each producer sleeps
+	// gap x Producers between its own items, so raising Producers raises the
+	// per-producer gap and makes the target rate easier to hit.
+	//
+	// There is still a host ceiling. Below roughly tens of microseconds per
+	// producer, sleeps overshoot and the aggregate offered rate falls short of the
+	// schedule no matter how the work is divided. Result.Lateness reports the
+	// overshoot and LatenessValid marks such a run invalid, which is the guard to
+	// rely on rather than assuming any rate is reachable.
 	Producers int
 
 	// Warmup discards samples offered before this point, so scheduler and
@@ -61,6 +71,19 @@ type Config struct {
 	// is reported in Result rather than leaking the processor on a full completion
 	// channel.
 	CompletionDeadline time.Duration
+
+	// DisableGCDuringRun turns the collector off for the measured window and
+	// restores it afterwards.
+	//
+	// A GC cycle landing mid-run inflates processor sleeps and tail latencies, so a
+	// latency comparison is cleaner without one. It is opt-in rather than default
+	// because disabling GC while deliberately overloading an unbounded queue is how
+	// a scenario turns into an OOM: the overload scenarios exist to accumulate
+	// gigabytes, and they need the collector running.
+	//
+	// Result.GCDuringRun reports whether a collection happened regardless, so a run
+	// can be treated as suspect without disabling anything.
+	DisableGCDuringRun bool
 
 	// LatenessBudget marks a run invalid when the generator itself fell behind by
 	// more than this at p99. Without this guard, an overloaded generator would be
@@ -126,15 +149,42 @@ type Result struct {
 	Batches          int
 	MeanBatchSize    float64
 	PartialBatches   int
-	BatchSizes       Distribution // as durations for reuse; nanoseconds == items
+	BatchSizeDist    IntDistribution
 	DownstreamPerSec float64
 
 	// Resources
-	AllocsPerItem  float64
-	HeapHighWater  uint64 // peak HeapAlloc observed while load was in flight
-	PendingPeak    int64  // peak accepted-but-unfinished items (queue depth proxy)
-	GCCount        uint32
-	GCPauseTotal   time.Duration
+	AllocsPerItem float64
+
+	// HeapHighWater is the peak HeapAlloc sampled while load was in flight.
+	// HeapSampled reports whether the sampler actually fired: for a run shorter
+	// than the sample interval this falls back to the post-drain reading, which
+	// describes a recovered process rather than a peak. Treat HeapHighWater as
+	// meaningless when HeapSampled is false.
+	HeapHighWater uint64
+	HeapSampled   bool
+
+	// PendingWorkPeak is the peak of Batcher.Len(), sampled periodically.
+	//
+	// It is NOT queue depth. Len() counts accepted work that has not reached a
+	// terminal outcome, which includes the batch currently accumulating and the
+	// batch inside the processor. At sub-saturating rates it is therefore a
+	// sawtooth roughly one window deep even with no backlog at all, and periodic
+	// sampling misses the peaks of that sawtooth. It is a lower bound on
+	// in-system work, useful for showing that work accumulates under saturation,
+	// and unsuitable for reasoning about backlog at moderate load.
+	//
+	// Phase 2 adds Stats().Queued, which is true queue depth; prefer it once
+	// available.
+	PendingWorkPeak int64
+
+	GCCount      uint32
+	GCPauseTotal time.Duration
+
+	// GCDuringRun reports whether a collection ran inside the measured window. A
+	// GC cycle inflates processor sleeps and tail latencies, so a run with this
+	// set should be treated as suspect for tail-sensitive comparisons.
+	GCDuringRun bool
+
 	GoroutinesPeak int
 
 	Duration time.Duration
@@ -236,7 +286,16 @@ func Run(cfg Config) Result {
 	}()
 
 	var memBefore, memAfter runtime.MemStats
+
+	// Collect once before measuring so the baseline is a settled heap rather than
+	// whatever the previous scenario left behind.
 	runtime.GC()
+
+	if cfg.DisableGCDuringRun {
+		previous := debug.SetGCPercent(-1)
+		defer debug.SetGCPercent(previous)
+	}
+
 	runtime.ReadMemStats(&memBefore)
 
 	// Sample heap and queue depth while load is in flight. Reading only after the
@@ -245,6 +304,7 @@ func Run(cfg Config) Result {
 	var (
 		heapPeak    atomic.Uint64
 		pendingPeak atomic.Int64
+		samples     atomic.Int64
 		samplerDone = make(chan struct{})
 		samplerStop = make(chan struct{})
 	)
@@ -262,6 +322,8 @@ func Run(cfg Config) Result {
 			case <-samplerStop:
 				return
 			case <-ticker.C:
+				samples.Add(1)
+
 				runtime.ReadMemStats(&ms)
 
 				for {
@@ -356,7 +418,8 @@ func Run(cfg Config) Result {
 	<-errsDone
 
 	result := summarise(cfg, slots, batches, offeredFor, runDuration,
-		memBefore, memAfter, goroutinePk, heapPeak.Load(), pendingPeak.Load())
+		memBefore, memAfter, goroutinePk, heapPeak.Load(), pendingPeak.Load(),
+		samples.Load())
 
 	result.OfferedFor = offeredFor
 	result.TimedOut = timedOut

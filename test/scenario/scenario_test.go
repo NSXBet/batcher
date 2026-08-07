@@ -196,10 +196,10 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 		})
 
 		t.Logf("window=%-6s offered_for=%s offered/s=%.0f accepted/s=%.0f "+
-			"completed/s=%.0f pending_peak=%d heap_peak=%dMB",
+			"completed/s=%.0f work_peak=%d heap_peak=%dMB heap_sampled=%v",
 			window, result.OfferedFor.Round(time.Millisecond),
 			result.OfferedRate, result.AcceptedRate, result.CompletedRate,
-			result.PendingPeak, result.HeapHighWater/(1<<20))
+			result.PendingWorkPeak, result.HeapHighWater/(1<<20), result.HeapSampled)
 
 		require.False(t, result.TimedOut,
 			"window=%s: the run must complete rather than time out", window)
@@ -208,19 +208,23 @@ func TestSmallWindowGivesNoOverloadProtection(t *testing.T) {
 			"window=%s: an unbounded queue must accept everything, which is exactly "+
 				"why a smaller window cannot protect the process", window)
 
-		// Backlog must reflect the accept/complete deficit: whatever the host
-		// managed to offer, the queue absorbed the shortfall instead of pushing
-		// back. This holds on any hardware, because it is derived from the run's own
-		// rates over the run's own offered window rather than from the configured
-		// duration, which an open-loop generator may overshoot.
+		// The rate assertion is the load-bearing one: work is accepted faster than
+		// it completes, so the difference accumulates inside the batcher no matter
+		// how small the window is.
 		require.Greater(t, result.AcceptedRate, result.CompletedRate,
 			"window=%s: accepted rate must exceed completed rate under overload", window)
 
+		// PendingWorkPeak is a periodically sampled Len(), which counts in-flight
+		// work as well as queued work, so it is a lower bound on accumulation rather
+		// than a queue-depth measurement. Asserting it clears half the deficit is
+		// therefore a deliberately weak check on a deliberately weak metric: it
+		// confirms accumulation is real without pretending the number is backlog.
+		// True queue depth arrives with Stats().Queued in Phase 2.
 		deficit := (result.AcceptedRate - result.CompletedRate) * result.OfferedFor.Seconds()
-		require.Greater(t, float64(result.PendingPeak), deficit*0.5,
-			"window=%s: queued work must absorb the capacity deficit "+
-				"(peak=%d, deficit≈%.0f); a smaller window does not bound it",
-			window, result.PendingPeak, deficit)
+		require.Greater(t, float64(result.PendingWorkPeak), deficit*0.5,
+			"window=%s: in-system work must reflect the capacity deficit "+
+				"(work_peak=%d, deficit≈%.0f); a smaller window does not bound it",
+			window, result.PendingWorkPeak, deficit)
 	}
 }
 

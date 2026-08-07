@@ -33,7 +33,11 @@ guards-race:
 
 guards-allocs:
 	@echo "Checking allocation gates..."
-	@go test -run 'Alloc' -count=1 ./...
+	@go test -run 'Alloc' -count=1 -v ./... > /tmp/alloc-gate.txt 2>&1 || { cat /tmp/alloc-gate.txt; exit 1; }
+	@for want in TestAddAllocatesNothingPerCall TestHarnessRecorderDoesNotAllocatePerItem; do \
+		grep -q "^--- PASS: $$want" /tmp/alloc-gate.txt || { \
+			echo "allocation gate did not run $$want -- was it renamed?"; exit 1; }; \
+	done
 
 # Enqueue microbenchmarks with statistics suitable for benchstat.
 bench-enqueue:

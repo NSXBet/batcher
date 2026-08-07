@@ -31,7 +31,18 @@ jobs:
         run: go test -race ./...
       - name: Allocation gates
         # Thresholds are predeclared in docs/improvements/thresholds.md.
-        run: go test -run 'Alloc' -count=1 ./...
+        #
+        # A -run substring that matches nothing exits 0, which would silently drop
+        # this gate if a test were renamed. Assert the expected tests actually ran.
+        run: |
+          go test -run 'Alloc' -count=1 -v ./... 2>&1 | tee /tmp/alloc-gate.txt
+          for want in TestAddAllocatesNothingPerCall \
+                      TestHarnessRecorderDoesNotAllocatePerItem; do
+            if ! grep -q -- "--- PASS: $want" /tmp/alloc-gate.txt; then
+              echo "allocation gate did not run $want -- was it renamed?"
+              exit 1
+            fi
+          done
       - name: Enqueue microbenchmarks compile and run
         run: |
           go test -run='^$' -bench='BenchmarkBatcherEnqueue' \

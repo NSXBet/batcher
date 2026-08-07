@@ -53,7 +53,7 @@ func WriteReport(w io.Writer, results []Result) error {
 
 	header := fmt.Sprintf("%-26s %-8s %-9s %8s %8s %9s %9s %8s %10s %9s %7s",
 		"scenario", "window", "arrival", "p50", "p99", "p99.9", "max",
-		"batch", "pending_pk", "calls/s", "valid")
+		"batch", "work_pk", "calls/s", "valid")
 
 	if _, err := fmt.Fprintln(w, header); err != nil {
 		return err
@@ -81,7 +81,7 @@ func WriteReport(w io.Writer, results []Result) error {
 			round(r.EndToEnd.P999),
 			round(r.EndToEnd.Max),
 			r.MeanBatchSize,
-			r.PendingPeak,
+			r.PendingWorkPeak,
 			r.DownstreamPerSec,
 			valid,
 		); err != nil {
