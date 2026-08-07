@@ -76,8 +76,10 @@ func ProvideBatcherInFXWithOptions[T any](
 //     background. Accepted work is never discarded to make shutdown look clean.
 //   - A batcher that never started but holds queued work still drains, because
 //     Shutdown starts the consumer when one is needed.
-//   - Repeated application stop is idempotent: later Shutdown calls observe the
-//     same terminal result.
+//   - Repeated application stop is idempotent: later Shutdown calls wait on the
+//     same drain and return their own wait result. A caller that waits long enough
+//     sees nil even if an earlier caller timed out; an expired deadline is never
+//     stored and replayed to later callers.
 func provideBatcherModule[T any](
 	processorFactory any,
 	buildOptions func(Processor[T]) []Option[T],
@@ -92,8 +94,14 @@ func provideBatcherModule[T any](
 			func(processorFunc Processor[T]) *Batcher[T] {
 				options := buildOptions(processorFunc)
 
-				// Fx owns the lifecycle, so auto-start is forced off last and cannot
-				// be re-enabled by a caller-supplied option.
+				// Fx owns the lifecycle, so auto-start is forced off last: a
+				// caller-supplied WithSkipAutoStart cannot re-enable it, because the
+				// flag is only read after every option has run.
+				//
+				// Option is an arbitrary closure rather than a declarative value, so
+				// a caller could also try to start the batcher directly from an
+				// option. That is handled in Start, which is inert until New has
+				// finished wiring the batcher, not here.
 				options = append(options, WithSkipAutoStart[T]())
 
 				return New(options...)

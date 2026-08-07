@@ -144,3 +144,67 @@ func TestEveryOptionRespectsTheFreeze(t *testing.T) {
 		"post-construction WithProcessor must not replace the original processor")
 	require.NoError(t, after.ProcessorFunc(nil))
 }
+
+// TestHostileOptionCannotStartDuringConstruction pins that Start is inert until New
+// has finished wiring the batcher.
+//
+// Option is an arbitrary func(*Batcher[T]), not a declarative value, so a caller can
+// pass one that calls Start inside New's option loop. Before the guard that launched
+// the aggregator while New was still assigning fields, producing a data race inside
+// the library rather than in the caller's code:
+//
+//	WARNING: DATA RACE
+//	  Read at ... by goroutine 9: batcher.(*Batcher[int]).run()
+//	  Previous write at ... by goroutine 8: batcher.New[int]()
+//
+// Run under -race, this fails if the guard is removed.
+func TestHostileOptionCannotStartDuringConstruction(t *testing.T) {
+	t.Parallel()
+
+	var processed atomic.Int64
+
+	b := batcher.New[int](
+		// Hostile: tries to start the pipeline mid-construction.
+		batcher.Option[int](func(inner *batcher.Batcher[int]) { inner.Start() }),
+		batcher.WithBatchSize[int](1),
+		batcher.WithBatchInterval[int](time.Millisecond),
+		batcher.WithProcessor(func(items []int) error {
+			processed.Add(int64(len(items)))
+
+			return nil
+		}),
+	)
+
+	// The batcher must still be fully functional: New starts it after wiring.
+	b.Add(1)
+
+	require.NoError(t, b.Join(10*time.Second))
+	require.Equal(t, int64(1), processed.Load(),
+		"the batcher must process normally despite the hostile option")
+	require.NoError(t, b.Close())
+}
+
+// TestStartBeforeConstructionIsIgnoredNotFatal pins that the guard degrades to a
+// no-op rather than panicking, so a buggy option cannot take the process down.
+func TestStartBeforeConstructionIsIgnoredNotFatal(t *testing.T) {
+	t.Parallel()
+
+	require.NotPanics(t, func() {
+		b := batcher.New[int](
+			batcher.Option[int](func(inner *batcher.Batcher[int]) {
+				inner.Start()
+				inner.Start()
+			}),
+			batcher.WithSkipAutoStart[int](),
+			batcher.WithProcessor(batcher.NoOpProcessor[int]),
+		)
+
+		// SkipAutoStart plus a suppressed in-option Start means nothing is running;
+		// an explicit Start afterwards must still work.
+		b.Start()
+		b.Add(1)
+
+		require.NoError(t, b.Join(10*time.Second))
+		require.NoError(t, b.Close())
+	})
+}

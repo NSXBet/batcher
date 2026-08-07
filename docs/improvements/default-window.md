@@ -134,7 +134,7 @@ timer-only model would predict, because batches still fill during the burst.
 | --- | --- |
 | **1ms** | Increases downstream calls under saturation (495/s versus 199/s) and coalesces only 2 items at 1k/s. It optimises latency by nearly removing batching. |
 | **2ms** | At 1k/s, 3 items per batch and 373 calls/s. Too little coalescing for a default. |
-| **5ms** | Defensible, and better latency. But at 1k/s it yields 6 items per batch versus 11 at 10ms, and p99.9 measured *worse* than 10ms at that rate (13.1ms versus 21.7ms is within noise at 1k/s, but the coalescing gap is not). 10ms is the more conservative default. |
+| **5ms** | Defensible, and genuinely lower latency: at 1k/s its p99.9 measured *better* than 10ms (13.1ms versus 21.7ms), though both are within noise at that rate. The reason to prefer 10ms is coalescing, not latency — 6 items per batch versus 11 — which halves the batching benefit for a latency gain the measurement cannot even distinguish. |
 | **20-100ms** | Better coalescing at low rates, but reintroduces the per-hop latency this work exists to remove, and provides no additional protection above 10ms under saturation. |
 
 10ms is the point where latency is bounded at roughly the window while coalescing

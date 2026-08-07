@@ -170,6 +170,8 @@ Verified this way so far:
 | `BatchHeld` ownership transfer | field never populated |
 | Dispatch accounting | flush and terminal counts wrong |
 | Option freeze guard | data race under `-race` |
+| Runtime config snapshot | data race under `-race` |
+| `Start` construction guard | data race inside `New` under `-race` |
 | Queue capacity bound | `tryPush` grows past the bound |
 | Queue seal release | blocked publisher never released |
 | Blocking `Add` release on shutdown | caller hangs indefinitely |

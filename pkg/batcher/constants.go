@@ -10,7 +10,7 @@ const (
 	//
 	// 10ms is the evidence-backed latency/coalescing default. The decision matrix
 	// measured a 1s default adding up to ~1s p99 latency at 1k items/s, while 10ms
-	// reduced it to ~22ms and still coalesced ~11 items per batch. At 10k items/s it
+	// reduced it to ~12ms and still coalesced ~11 items per batch. At 10k items/s it
 	// coalesced ~101 items per batch while reducing p99 ~100ms to ~10ms. See
 	// docs/improvements/default-window.md for the complete matrix and caveats.
 	//
