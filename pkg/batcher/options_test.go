@@ -10,7 +10,11 @@ import (
 )
 
 func TestWithProcessor(t *testing.T) {
+	called := false
+
 	processor := batcher.Processor[test.BatchItem](func(_ []test.BatchItem) error {
+		called = true
+
 		return nil
 	})
 
@@ -20,7 +24,11 @@ func TestWithProcessor(t *testing.T) {
 	b := batcher.New(batcher.WithProcessor(processor))
 	defer func() { _ = b.Close() }()
 
-	require.IsType(t, processor, b.Config().ProcessorFunc)
+	// Invoke the configured processor rather than checking its type. Every
+	// Processor[T] has the same type, including the default no-op, so a type
+	// assertion would pass even if WithProcessor had done nothing.
+	require.NoError(t, b.Config().ProcessorFunc(nil))
+	require.True(t, called, "the configured processor must replace the default")
 }
 
 func TestWithBatchSize(t *testing.T) {

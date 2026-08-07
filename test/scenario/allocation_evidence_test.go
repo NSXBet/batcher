@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/NSXBet/batcher/test/scenario"
+	"github.com/stretchr/testify/require"
 )
 
 // TestSparseWindowAllocationEvidence measures allocated bytes per flush for the
@@ -56,6 +57,9 @@ func TestSparseWindowAllocationEvidence(t *testing.T) {
 			LatenessBudget: time.Second,
 		})
 
+		require.False(t, result.TimedOut,
+			"%s: scenario timed out; allocation evidence is invalid", c.name)
+
 		// scenario.Item is the harness payload; the aggregator reserves
 		// BatchSize slots of it per flush regardless of how many arrive.
 		itemSize := float64(unsafe.Sizeof(scenario.Item{}))
@@ -69,4 +73,23 @@ func TestSparseWindowAllocationEvidence(t *testing.T) {
 			c.name, result.MeanBatchSize, result.Batches,
 			result.AllocsPerItem, wastePerFlush)
 	}
+}
+
+// TestSparseWindowAllocationEvidenceRejectsTimedOutRun pins that evidence is not
+// logged when the processor did not finish. A timed-out run has incomplete batches
+// and allocation counts, so treating it as capacity evidence would be misleading.
+func TestSparseWindowAllocationEvidenceRejectsTimedOutRun(t *testing.T) {
+	t.Parallel()
+
+	result := scenario.Run(scenario.Config{
+		Name:               "timed-out-evidence",
+		BatchSize:          1,
+		BatchInterval:      time.Millisecond,
+		Arrival:            scenario.Steady(1_000, 100*time.Millisecond),
+		Processor:          scenario.FixedProcessor(100 * time.Millisecond),
+		CompletionDeadline: time.Millisecond,
+		LatenessBudget:     time.Second,
+	})
+
+	require.True(t, result.TimedOut, "the deliberately blocked run must time out")
 }

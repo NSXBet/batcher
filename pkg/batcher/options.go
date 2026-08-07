@@ -9,6 +9,10 @@ type Option[T any] func(*Batcher[T])
 // WithProcessor sets the processor function to be called for each batch.
 func WithProcessor[T any](fn Processor[T]) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		b.config.ProcessorFunc = fn
 	}
 }
@@ -16,6 +20,10 @@ func WithProcessor[T any](fn Processor[T]) Option[T] {
 // WithBatchSize sets the batch size.
 func WithBatchSize[T any](batchSize int) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if batchSize <= 0 {
 			batchSize = 1000
 		}
@@ -27,6 +35,10 @@ func WithBatchSize[T any](batchSize int) Option[T] {
 // WithBatchInterval sets the batch interval.
 func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if batchInterval <= 0 {
 			batchInterval = 1 * time.Second
 		}
@@ -38,6 +50,10 @@ func WithBatchInterval[T any](batchInterval time.Duration) Option[T] {
 // WithSkipAutoStart skips the automatic start of the batcher.
 func WithSkipAutoStart[T any]() Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		b.config.SkipAutoStart = true
 	}
 }
@@ -59,6 +75,10 @@ func WithSkipAutoStart[T any]() Option[T] {
 // the peak by up to two batches.
 func WithMaxQueueSize[T any](maxQueueSize int) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if maxQueueSize < 0 {
 			maxQueueSize = 0
 		}
@@ -71,6 +91,10 @@ func WithMaxQueueSize[T any](maxQueueSize int) Option[T] {
 // reporting ErrTimeout. The drain is never abandoned when the grace expires.
 func WithCloseGrace[T any](grace time.Duration) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if grace <= 0 {
 			grace = DefaultCloseGrace
 		}
@@ -92,6 +116,10 @@ func WithCloseGrace[T any](grace time.Duration) Option[T] {
 // loss.
 func WithErrorBufferSize[T any](size int) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if size <= 0 {
 			size = DefaultErrorBufferSize
 		}
@@ -122,6 +150,10 @@ func WithErrorBufferSize[T any](size int) Option[T] {
 // remaining processor time *plus* a full BatchInterval.
 func WithConcurrency[T any](concurrency int) Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		if concurrency < 1 {
 			concurrency = 1
 		}
@@ -145,6 +177,10 @@ func WithConcurrency[T any](concurrency int) Option[T] {
 //   - every accepted item is processed exactly once by the pool itself.
 func WithoutOrderedProcessing[T any]() Option[T] {
 	return func(b *Batcher[T]) {
+		if b.configFrozen.Load() {
+			return
+		}
+
 		b.config.UnorderedProcessingAcknowledged = true
 	}
 }

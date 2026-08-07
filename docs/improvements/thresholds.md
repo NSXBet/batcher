@@ -130,7 +130,21 @@ Results per workload, adaptive versus the previous full-capacity strategy:
 
 The alternating case is the one that killed the rejected EWMA estimator, which
 allocated *more* than doing nothing there. Recent-max keeps it inside the +2%
-budget. Enforced by `BenchmarkCapacity*` and `capacity_test.go`.
+budget.
+
+These figures are **measured evidence, not an enforced gate.** `BenchmarkCapacity*`
+reports allocated bytes for each workload but does not compare them against the +2%
+limit, and `capacity_test.go` asserts estimator behaviour (bounds, adaptation,
+decay) rather than allocation deltas. Re-check the numbers with:
+
+```sh
+go test -run='^$' -bench='BenchmarkCapacity' -benchmem -count=1 ./pkg/batcher
+```
+
+Turning this into a gate needs a stored allocation baseline for the reference
+runner, which does not exist yet for the same reason the throughput gate is still
+advisory. Until then, a regression here is caught by reading the benchmark output,
+not by CI.
 
 The second gate must hold for alternating sparse/full, burst-after-idle, and
 bimodal workloads, not just the sparse case the optimisation targets. An

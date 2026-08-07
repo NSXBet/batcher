@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +41,12 @@ type Config[T any] struct {
 
 type Batcher[T any] struct {
 	config *Config[T]
+
+	// configFrozen becomes true before any processing goroutine starts. Options
+	// are construction-time configuration: applying one to an existing batcher is
+	// a no-op, so a caller cannot race the aggregator or processor by mutating
+	// BatchSize, BatchInterval or ProcessorFunc after New returns.
+	configFrozen atomic.Bool
 
 	gate     *admissionGate
 	counters counters
@@ -92,6 +99,11 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	}
 
 	b.validateConfig()
+
+	// No option may change configuration after this point, including a batcher
+	// constructed with WithSkipAutoStart. SkipAutoStart controls lifecycle, not
+	// whether the configuration is still mutable.
+	b.configFrozen.Store(true)
 
 	b.input = newQueue[T](b.config.MaxQueueSize)
 	b.errorsChan = make(chan error, b.config.ErrorBufferSize)

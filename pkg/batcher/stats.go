@@ -69,9 +69,11 @@ type Stats struct {
 	Rejected uint64
 
 	// BatchesFlushed counts batches emitted by the aggregator, in batches rather
-	// than items. Together with Completed it gives the mean batch size, which is
-	// the coalescing figure to watch when tuning BatchInterval: a mean far below
-	// BatchSize means the window is closing on the timer rather than on size.
+	// than items. After a terminal drain, (Completed + Failed + Panicked) /
+	// BatchesFlushed gives the mean batch size. All terminal outcomes are included:
+	// a processor failure or recovered panic does not make its batch disappear from
+	// the coalescing figure. A mean far below BatchSize means the window is closing
+	// on the timer rather than on size.
 	BatchesFlushed uint64
 
 	// DroppedErrors counts diagnostics discarded because the Errors() buffer was

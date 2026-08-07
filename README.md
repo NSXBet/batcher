@@ -302,13 +302,16 @@ s := b.Stats()
 //   s.Accepted       -> successful enqueues
 //   s.Rejected       -> refused enqueues
 //   s.Completed / s.Failed / s.Panicked -> mutually exclusive terminal outcomes
-//   s.BatchesFlushed -> batches emitted; Completed/BatchesFlushed is mean batch size
+//   s.BatchesFlushed -> batches emitted. After a terminal drain,
+//                       (Completed+Failed+Panicked)/BatchesFlushed is mean batch size
 //   s.DroppedErrors  -> diagnostics lost because Errors() was not drained
 ```
 
 `BatchesFlushed` is the coalescing signal when tuning `WithBatchInterval`: a mean
 batch size well below `BatchSize` means windows are closing on the timer rather than
-filling, so the interval is costing latency without buying batching.
+filling, so the interval is costing latency without buying batching. Include every
+terminal outcome in that mean — a failed or panicked batch was still flushed, so
+dividing by `Completed` alone undercounts whenever the processor errors.
 
 A rising `BatchHeld` with `InFlight` at its ceiling means batches are ready but every
 worker is busy — that is the signal to raise `WithConcurrency`, not to shrink the
