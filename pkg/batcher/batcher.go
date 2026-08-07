@@ -458,15 +458,43 @@ func (b *Batcher[T]) run() {
 
 	// drainReady empties whatever is currently queued. The aggregator drains
 	// greedily rather than one item per wakeup, so a burst costs one signal.
+	//
+	// It transfers a run of items under a single queue lock rather than locking per
+	// item. The aggregator is the only consumer and keeps no invariant between items,
+	// so a block transfer is indistinguishable from N pops to it, while per-item
+	// locking was what serialised producers: profiling attributed 86% of mutex delay
+	// and 61% of CPU to the push path contending with this loop.
+	//
+	// Each transfer takes only what the batch being built can still accept. That
+	// bounds how long the queue lock is held, and it keeps the capacity contract
+	// exact: transferred items move straight into batch, so no additional
+	// batch-sized buffer of accepted work exists outside the queue. Draining a full
+	// batchSize regardless of the batch's remaining space added exactly that third
+	// buffer and pushed accepted work past N + 2*BatchSize + gate.
+	//
+	// drained is reused across wakeups to keep steady-state draining allocation-free.
+	// It is deliberately separate from batch: batch is handed to a worker and may be
+	// retained by the processor, whereas drained never leaves this goroutine.
+	drained := make([]T, 0, batchSize)
+
 	drainReady := func() {
 		for {
-			item, ok := b.input.pop()
-			if !ok {
+			room := batchSize - len(batch)
+			if room <= 0 {
+				// take flushes at batchSize, so this only happens if a flush could not
+				// complete. Fall back to one item and let take drive the flush.
+				room = 1
+			}
+
+			drained = b.input.popBatch(drained[:0], room)
+			if len(drained) == 0 {
 				return
 			}
 
-			b.counters.received(1)
-			take(item)
+			for _, item := range drained {
+				b.counters.received(1)
+				take(item)
+			}
 		}
 	}
 
