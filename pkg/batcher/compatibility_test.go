@@ -165,3 +165,29 @@ func TestLegacyProvideBatcherInFXSignatureStillCompiles(t *testing.T) {
 
 	require.Equal(t, 2, p.seen)
 }
+
+// TestDefaultBatchIntervalStaysOneSecond pins the default's literal value, not just
+// that Config reports whatever the constant happens to say.
+//
+// The 10ms decision record makes a strong latency case, and it is easy to read as a
+// mandate to change this constant. It was deliberately not changed: at 1,000 items/s
+// the measured downstream call rate moves from ~1/s to ~94/s, and that cost lands on
+// callers who never configured an interval. Lowering the default is a behaviour change
+// for every such caller, so it needs its own decision rather than arriving as a tidy-up.
+//
+// Asserting through Config as well as the constant covers both halves: the advertised
+// value and the value New actually applies.
+func TestDefaultBatchIntervalStaysOneSecond(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, time.Second, batcher.DefaultBatchInterval,
+		"DefaultBatchInterval must stay 1s; see docs/improvements/default-window.md, "+
+			"which recommends 10ms as an explicit setting rather than as the default")
+
+	b := batcher.New(batcher.WithProcessor(batcher.NoOpProcessor[int]))
+
+	t.Cleanup(func() { _ = b.Close() })
+
+	require.Equal(t, time.Second, b.Config().BatchInterval,
+		"a batcher constructed without WithBatchInterval must use the 1s default")
+}

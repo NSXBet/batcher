@@ -11,7 +11,8 @@ listed below with what it was, what it is now, and what a caller has to do.
 The module is `v0.x`, so a minor bump is the correct signal for breaking changes
 under Go module semantics: no import path change is required, and callers opt in by
 updating. A `v1.0.0` would be the wrong claim to make while the default batch
-interval is still under review (see the [decision record](./default-window.md)).
+interval is still under review (see the [decision record](./default-window.md), which
+keeps 1s for now and recommends 10ms as an explicit setting).
 
 ## Requires Go 1.25.0
 
@@ -63,46 +64,38 @@ b = batcher.New(batcher.WithBatchSize[Item](500), batcher.WithProcessor(fn))
 Code that only *reads* `Config()` compiles unchanged. Code that assigned through it
 will now fail to compile, which is the intended outcome: it was racing.
 
-### `DefaultBatchInterval` changes 1s → 10ms
+### `DefaultBatchInterval` is unchanged at 1s
 
 | | |
 | --- | --- |
 | **Before** | `DefaultBatchInterval = 1 * time.Second` |
-| **After** | `DefaultBatchInterval = 10 * time.Millisecond` |
+| **After** | `DefaultBatchInterval = 1 * time.Second` |
 
-This affects every caller that did not set `WithBatchInterval`, and it is a
-behaviour change rather than a bug fix: batches close sooner, so latency drops and
-the downstream call rate rises whenever `BatchSize` is not reached first.
+An earlier draft of this release changed the default to 10ms on latency evidence. It
+was not shipped. The measurement holds — at 1,000 items/s the 1s default measures p99
+981ms against 12ms at 10ms — but the same tables show the downstream call rate moving
+from ~1 call/s to ~94 calls/s at that rate. That is a CPU and downstream-load
+increase for every caller who never configured an interval, so the low-latency value
+is published as a recommendation instead of imposed as a default.
 
-The decision and its full measurement matrix are in
-[`default-window.md`](./default-window.md). In short: at 1,000 items/s the old
-default measured p99 981ms; 10ms measured p99 12ms while still coalescing ~11 items
-per batch.
+**Nothing to migrate.** Callers keep the behaviour they have today.
 
-**Who is affected:**
-
-| Situation | Effect | Action |
-| --- | --- | --- |
-| Sets a **positive** `WithBatchInterval` | None | None |
-| Passes `WithBatchInterval(0)` or a negative value | Falls back to the default, so it moves to 10ms too | Pass an explicit positive interval to keep 1s |
-| Relies on the default, traffic ≥ 10k/s | None measurable — `BatchSize` was already binding | None |
-| Relies on the default, sparse traffic | Latency drops sharply; more downstream calls | Confirm the new call rate is acceptable |
-| Depends on ~1000-item batches at low traffic | Batches become much smaller | Set `WithBatchInterval` explicitly, or raise `BatchSize` |
-
-**Migration:**
+To adopt the recommendation, set it explicitly:
 
 ```go
-// Keep the previous behaviour explicitly.
 b := batcher.New(
     batcher.WithProcessor(fn),
-    batcher.WithBatchInterval[Item](time.Second),
+    batcher.WithBatchInterval[Item](10*time.Millisecond),
 )
 ```
 
+The decision, its full matrix, and the call-rate cost per arrival rate are in
+[`default-window.md`](./default-window.md).
+
 Note that shrinking the interval is **not** overload protection, and neither is
 keeping it large: under a saturated downstream every interval from 10ms to 1s
-accepted the same load. If the concern is memory rather than latency, bound the
-queue instead:
+accepted the same load. If the concern is memory rather than latency, bound the queue
+instead:
 
 ```go
 b := batcher.New(

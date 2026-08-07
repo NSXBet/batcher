@@ -1,13 +1,24 @@
 # Decision record: default batch interval
 
-**Decision:** `DefaultBatchInterval` changes from **1s to 10ms** in v0.3.0.
+**Decision:** `DefaultBatchInterval` **stays at 1s**. 10ms is published as the
+recommended value for latency-sensitive services, and callers opt in with
+`WithBatchInterval`.
 
-**Status:** accepted, with the caveat in [Where 10ms is the wrong
-choice](#where-10ms-is-the-wrong-choice).
+**Status:** accepted. Supersedes an earlier draft of this record that changed the
+default to 10ms.
 
-This record exists because the plan required the default to follow measurement
-rather than intuition. If the evidence had been ambiguous, the correct outcome was to
-keep 1s and publish a configuration recommendation instead. It was not ambiguous.
+The plan required the default to follow measurement rather than intuition, and the
+measurement below is not in dispute: 10ms is a large latency win at sparse rates and
+still coalesces meaningfully. What the latency tables alone do not settle is who pays
+for it. At 1k items/s the downstream call rate moves from ~10 calls/s to ~94 calls/s —
+roughly 10x more downstream requests and the CPU that goes with them — for every
+existing caller who never set an interval and never asked for lower latency.
+
+A default is the setting imposed on people who have not thought about the trade-off.
+Latency is visible to whoever is measuring it and can be fixed with one option; a
+silent 10x increase in downstream load is not visible to that same caller until
+something else saturates. So the evidence is published as tuning guidance, and the
+default stays where existing deployments already are.
 
 ## The problem being solved
 
@@ -18,7 +29,9 @@ worst for sparse traffic, which is exactly the traffic that gains least from
 batching.
 
 With a 1s default, a five-hop sparse path could accumulate several seconds before any
-downstream work happened.
+downstream work happened. That is the cost this record quantifies, and the reason
+10ms is *recommended*; it is not, on its own, a reason to move the default for
+callers whose downstream cost this record cannot see.
 
 ## Environment
 
@@ -109,8 +122,8 @@ are the same. This is the check that prevented the decision resting on latency a
 — a smaller default would have been wrong if it traded latency for stability.
 
 Only 1ms differs, and it is *worse* on downstream load (495 calls/s versus 199)
-because it flushes before batches fill. That is one reason the default is 10ms rather
-than the lowest measured value.
+because it flushes before batches fill. That is one reason the recommendation is 10ms
+rather than the lowest measured value.
 
 ## Evidence 4: bursts
 
@@ -128,7 +141,7 @@ worst on paper, since each burst coalesces from a standing start:
 10ms halves p99 against 100ms while only doubling downstream calls — not the 10x a
 timer-only model would predict, because batches still fill during the burst.
 
-## Why 10ms and not 5ms or 1ms
+## Why the recommendation is 10ms, and not 5ms or 1ms
 
 | Candidate | Rejected because |
 | --- | --- |
@@ -139,8 +152,10 @@ timer-only model would predict, because batches still fill during the burst.
 
 10ms is the point where latency is bounded at roughly the window while coalescing
 remains meaningful at every rate tested (11x at 1k/s, 101x at 10k/s, 500x at 50k/s).
+That makes it the right *recommendation*; the call-rate cost above is why it is not
+the default.
 
-## Where 10ms is the wrong choice
+## Where 10ms is the wrong choice (and the default is right)
 
 **A service at ~1k items/s with an expensive downstream.** 10ms gives ~11x
 coalescing and ~94 downstream calls/s. If a downstream call is costly enough that 94
@@ -162,25 +177,43 @@ with the queue absorbing the difference. Protection requires `WithMaxQueueSize` 
 `Enqueue`, or upstream flow control.
 
 **A service with a slow processor and `Concurrency=1`.** The effective interval is
-`max(BatchInterval, processor duration)`. With a 50ms processor, a 10ms window
-behaves like a 50ms one — and measured p50 *worse* than a 100ms window (120ms versus
-100ms), because queueing dominates. Raise `WithConcurrency` (with
-`WithoutOrderedProcessing`) before lowering the interval.
+`max(BatchInterval, processor duration)`, so a window below the processor duration
+buys nothing and can measure *worse*. With a 50ms processor at 10k items/s, a **5ms**
+window measured p50 120ms against 100ms for a 100ms window, because queueing
+dominates once the processor is the bottleneck.
 
-## Migration
+`TestReproducesInlineSlowProcessorInversion` pins the ordering (5ms slower than
+100ms), not those millisecond values; the figures are from the environment recorded
+above (darwin/arm64, Apple M4 Pro, Go 1.26.5, `GOMAXPROCS=12`) and will differ
+elsewhere. Raise `WithConcurrency` (with `WithoutOrderedProcessing`) before lowering
+the interval.
 
-This is a **behaviour change for every caller who did not set `WithBatchInterval`**.
+## Adopting 10ms
 
-| Situation | Effect | Action |
-| --- | --- | --- |
-| Sets `WithBatchInterval` to a **positive** value | None | None |
-| Passes `WithBatchInterval(0)` or a negative duration | Falls back to `DefaultBatchInterval`, so it moves 1s → 10ms with everyone else | Pass an explicit positive interval if you relied on the old 1s fallback |
-| Relies on the 1s default, traffic ≥ 10k/s | None measurable — `BatchSize` was already the binding constraint | None |
-| Relies on the 1s default, sparse traffic | Latency drops sharply; downstream call rate rises | Verify the new call rate is acceptable; set a larger interval if not |
-| Depends on ~1000-item batches at low traffic | Batches become much smaller | Set `WithBatchInterval` explicitly, or raise `BatchSize` |
+There is no migration: the default is unchanged, so every existing caller keeps the
+behaviour it has today. Adopting the recommendation is opt-in.
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(processor),
+    batcher.WithBatchInterval[Item](10*time.Millisecond),
+)
+```
+
+Before adopting it, check the effect on your own traffic. The interval only binds
+when it closes a batch before `BatchSize` does — expected batch size is
+approximately `min(arrival rate × interval, BatchSize)` — so the change is largest at
+sparse rates and vanishes once `BatchSize` is reached first.
+
+| Your arrival rate | 1s default | 10ms | What to check |
+| --- | --- | --- | --- |
+| ~1k/s | ~1000 items/batch, ~1 call/s | ~11 items/batch, ~94 calls/s | Downstream cost per call. This is the ~90x call-rate increase; it is the whole reason 10ms is not the default |
+| ~10k/s | ~1000 items/batch, ~10 calls/s | ~101 items/batch, ~99 calls/s | Still ~10x more calls. `BatchSize` binds at 1s, the timer binds at 10ms |
+| ~50k/s | ~1000 items/batch, ~50 calls/s | ~500 items/batch, ~100 calls/s | ~2x more calls. `BatchSize` caps both, so the gap narrows |
+| Saturated | `BatchSize` binds | `BatchSize` binds | Nothing. Identical under saturation |
 
 `Stats().BatchesFlushed` with the terminal counters gives mean batch size after a
-drain, which is the fastest way to confirm what the change did to your own
+drain, which is the fastest way to confirm what an interval change did to your own
 coalescing:
 
 ```go
@@ -201,3 +234,6 @@ if s.BatchesFlushed > 0 {
   darwin/arm64 only.
 - A reported workload where 10ms coalescing is insufficient *and* the sizing rule
   fails to predict it, which would mean the guidance is wrong rather than the default.
+- Evidence that the downstream call-rate increase is acceptable for the general case —
+  for example a major version where callers must revisit configuration anyway. That is
+  what would move 10ms from recommendation to default.

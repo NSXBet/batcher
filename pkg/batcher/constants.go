@@ -8,16 +8,22 @@ const (
 
 	// DefaultBatchInterval is the maximum age of a partial batch.
 	//
-	// 10ms is the evidence-backed latency/coalescing default. The decision matrix
-	// measured a 1s default adding up to ~1s p99 latency at 1k items/s, while 10ms
-	// reduced it to ~12ms and still coalesced ~11 items per batch. At 10k items/s it
-	// coalesced ~101 items per batch while reducing p99 ~100ms to ~10ms. See
-	// docs/improvements/default-window.md for the complete matrix and caveats.
+	// It stays at 1s. A smaller default would lower latency for callers who never
+	// set an interval, but it raises the downstream call rate for all of them: the
+	// measured matrix shows ~10 calls/s at 1s versus ~94-100 calls/s at 10ms once
+	// the timer rather than BatchSize closes each batch. That is a CPU and
+	// downstream-load change imposed on existing users who did not ask for it, so
+	// the low-latency setting is opt-in rather than the default.
+	//
+	// Callers who want lower latency should set WithBatchInterval explicitly; 10ms
+	// measured p99 ~12ms at 1k items/s while still coalescing ~11 items per batch.
+	// docs/improvements/default-window.md holds the full matrix and its caveats, and
+	// the README's "Choosing a batch interval" section carries the call-rate columns
+	// for picking a value.
 	//
 	// This is a maximum partial-batch age, not overload protection. Services that
-	// need larger batches at low traffic must set WithBatchInterval deliberately;
-	// services that need process protection must use WithMaxQueueSize and Enqueue.
-	DefaultBatchInterval = 10 * time.Millisecond
+	// need process protection must use WithMaxQueueSize and Enqueue.
+	DefaultBatchInterval = 1 * time.Second
 
 	// DefaultConcurrency is how many batches are processed at once by default.
 	//

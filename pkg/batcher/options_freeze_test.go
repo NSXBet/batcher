@@ -145,27 +145,48 @@ func TestEveryOptionRespectsTheFreeze(t *testing.T) {
 	require.NoError(t, after.ProcessorFunc(nil))
 }
 
-// TestHostileOptionCannotStartDuringConstruction pins that Start is inert until New
-// has finished wiring the batcher.
+// TestStartFromAnOptionPanics pins that Start refuses to run before New has finished
+// wiring the batcher.
 //
 // Option is an arbitrary func(*Batcher[T]), not a declarative value, so a caller can
-// pass one that calls Start inside New's option loop. Before the guard that launched
-// the aggregator while New was still assigning fields, producing a data race inside
-// the library rather than in the caller's code:
+// pass one that calls Start inside New's option loop. That launched the aggregator
+// while New was still assigning fields, producing a data race inside the library
+// rather than in the caller's code:
 //
 //	WARNING: DATA RACE
 //	  Read at ... by goroutine 9: batcher.(*Batcher[int]).run()
 //	  Previous write at ... by goroutine 8: batcher.New[int]()
 //
-// Run under -race, this fails if the guard is removed.
-func TestHostileOptionCannotStartDuringConstruction(t *testing.T) {
+// It panics rather than ignoring the call: a caller who wrote Start meant it, and
+// silently doing nothing would leave them believing a batcher is running when it is
+// not. The panic message must name the cause, since the stack points into New.
+func TestStartFromAnOptionPanics(t *testing.T) {
+	t.Parallel()
+
+	require.PanicsWithValue(t,
+		"batcher: Start called before construction finished. "+
+			"Option is an arbitrary func(*Batcher[T]), so an option that calls "+
+			"Start runs while New is still assigning fields, and starting the "+
+			"aggregator there is a data race on the queue. Do not call Start from "+
+			"an Option: New starts the batcher itself unless WithSkipAutoStart is "+
+			"given, in which case call Start after New returns.",
+		func() {
+			batcher.New[int](
+				batcher.Option[int](func(inner *batcher.Batcher[int]) { inner.Start() }),
+				batcher.WithProcessor(batcher.NoOpProcessor[int]),
+			)
+		})
+}
+
+// TestStartAfterConstructionWorks is the control for TestStartFromAnOptionPanics: the
+// guard must reject only pre-construction calls, not Start itself.
+func TestStartAfterConstructionWorks(t *testing.T) {
 	t.Parallel()
 
 	var processed atomic.Int64
 
 	b := batcher.New[int](
-		// Hostile: tries to start the pipeline mid-construction.
-		batcher.Option[int](func(inner *batcher.Batcher[int]) { inner.Start() }),
+		batcher.WithSkipAutoStart[int](),
 		batcher.WithBatchSize[int](1),
 		batcher.WithBatchInterval[int](time.Millisecond),
 		batcher.WithProcessor(func(items []int) error {
@@ -175,36 +196,14 @@ func TestHostileOptionCannotStartDuringConstruction(t *testing.T) {
 		}),
 	)
 
-	// The batcher must still be fully functional: New starts it after wiring.
+	t.Cleanup(func() { _ = b.Close() })
+
+	// Idempotent, and legal once New has returned.
+	b.Start()
+	b.Start()
+
 	b.Add(1)
 
 	require.NoError(t, b.Join(10*time.Second))
-	require.Equal(t, int64(1), processed.Load(),
-		"the batcher must process normally despite the hostile option")
-	require.NoError(t, b.Close())
-}
-
-// TestStartBeforeConstructionIsIgnoredNotFatal pins that the guard degrades to a
-// no-op rather than panicking, so a buggy option cannot take the process down.
-func TestStartBeforeConstructionIsIgnoredNotFatal(t *testing.T) {
-	t.Parallel()
-
-	require.NotPanics(t, func() {
-		b := batcher.New[int](
-			batcher.Option[int](func(inner *batcher.Batcher[int]) {
-				inner.Start()
-				inner.Start()
-			}),
-			batcher.WithSkipAutoStart[int](),
-			batcher.WithProcessor(batcher.NoOpProcessor[int]),
-		)
-
-		// SkipAutoStart plus a suppressed in-option Start means nothing is running;
-		// an explicit Start afterwards must still work.
-		b.Start()
-		b.Add(1)
-
-		require.NoError(t, b.Join(10*time.Second))
-		require.NoError(t, b.Close())
-	})
+	require.Equal(t, int64(1), processed.Load())
 }

@@ -192,14 +192,21 @@ func (b *Batcher[T]) validateConfig() {
 // the drain needs a consumer to make progress. Declining to start here would leave
 // the drain waiting on a consumer that never exists, which deadlocks shutdown when
 // Start and Shutdown race.
+//
+// Start panics if called before New has finished constructing the batcher, which is
+// reachable only from inside an Option, since Option is an arbitrary
+// func(*Batcher[T]). Starting there would launch the aggregator against fields New
+// has not assigned yet — a data race inside the library. It panics rather than
+// ignoring the call because a caller who wrote Start meant it, and silently doing
+// nothing would leave them believing a batcher is running when it is not.
 func (b *Batcher[T]) Start() {
-	// Inert until New has finished wiring the batcher. Option is an arbitrary
-	// closure, so a caller can invoke Start from inside the option loop; launching
-	// the aggregator then would read fields New has not assigned yet. Ignoring the
-	// call is safe: New starts the batcher itself unless WithSkipAutoStart was
-	// given, and a caller that meant to start it can call Start after New returns.
 	if !b.constructed.Load() {
-		return
+		panic("batcher: Start called before construction finished. " +
+			"Option is an arbitrary func(*Batcher[T]), so an option that calls " +
+			"Start runs while New is still assigning fields, and starting the " +
+			"aggregator there is a data race on the queue. Do not call Start from " +
+			"an Option: New starts the batcher itself unless WithSkipAutoStart is " +
+			"given, in which case call Start after New returns.")
 	}
 
 	b.startOnce.Do(func() {

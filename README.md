@@ -348,7 +348,7 @@ fmt.Printf("batcher has %d items\n", batcher.Len())
 | --- | --- | --- |
 | `WithProcessor(fn)` | no-op | The function called with each batch. |
 | `WithBatchSize[T](n)` | 1000 | Flush as soon as a batch holds `n` items. |
-| `WithBatchInterval[T](d)` | **10ms** | Maximum age of a partial batch. See [Choosing a batch interval](#choosing-a-batch-interval). |
+| `WithBatchInterval[T](d)` | 1s | Maximum age of a partial batch. 1s is conservative; see [Choosing a batch interval](#choosing-a-batch-interval). |
 | `WithMaxQueueSize[T](n)` | unbounded | Bound queued items to get back-pressure instead of unbounded growth. |
 | `WithConcurrency[T](n)` | 1 | Process `n` batches at once. Requires `WithoutOrderedProcessing`. |
 | `WithoutOrderedProcessing[T]()` | off | Acknowledges that `n > 1` gives up cross-batch ordering and processor mutual exclusion. |
@@ -374,15 +374,31 @@ reaches 1,000 items after about 20ms, so configuring a 100ms interval changes no
 
 Use the formula to pick an interval from the coalescing you actually need:
 
-| Arrival rate | 10ms (default) | 100ms |
-| --- | --- | --- |
-| 1,000/s | ~11 items/batch, ~94 calls/s, p99 ~12ms | ~100 items/batch, ~10 calls/s, p99 ~100ms |
-| 10,000/s | ~101 items/batch, ~99 calls/s, p99 ~10ms | ~1000 items/batch, ~10 calls/s, p99 ~99ms |
-| 50,000/s | ~500 items/batch, ~100 calls/s, p99 ~10ms | ~1000 items/batch (capped by `BatchSize`), ~50 calls/s, p99 ~20ms |
+| Arrival rate | 10ms | 100ms | 1s (default) |
+| --- | --- | --- | --- |
+| 1,000/s | ~11 items/batch, ~94 calls/s, p99 ~12ms | ~100 items/batch, ~10 calls/s, p99 ~100ms | ~1000 items/batch, ~1 call/s, p99 ~981ms |
+| 10,000/s | ~101 items/batch, ~99 calls/s, p99 ~10ms | ~1000 items/batch, ~10 calls/s, p99 ~99ms | ~1000 items/batch, ~10 calls/s, p99 ~99ms |
+| 50,000/s | ~500 items/batch, ~100 calls/s, p99 ~10ms | ~1000 items/batch (capped by `BatchSize`), ~50 calls/s, p99 ~20ms | ~1000 items/batch, ~50 calls/s, p99 ~20ms |
 
-Raise the interval when your downstream is expensive enough that the call rate at
-10ms is unacceptable — most relevant below a few thousand items/s. The full matrix
-and the reasoning behind the default are in
+**The default is 1s, and it is deliberately conservative.** It favours coalescing and
+a low downstream call rate over latency, which is the safe direction for a shared
+library: a caller who needs lower latency can measure it and set one option, whereas a
+default that quietly multiplied everyone's downstream call rate would not show up
+until something else saturated.
+
+**Set 10ms when latency matters.** At sparse rates it is the difference between p99
+~981ms and ~12ms while still coalescing ~11 items per batch. Note the cost in the
+table: at 1,000/s it moves ~1 call/s to ~94 calls/s. Above ~10k/s, `BatchSize` closes
+batches before either timer fires and the choice stops mattering.
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(processor),
+    batcher.WithBatchInterval[Item](10*time.Millisecond),
+)
+```
+
+The full matrix, and why 10ms is recommended rather than made the default, are in
 [`docs/improvements/default-window.md`](./docs/improvements/default-window.md).
 
 **Shrinking the interval is not overload protection.** Measured with a saturated
@@ -392,17 +408,24 @@ completing the same amount, with the queue absorbing the difference. Use
 
 **A slow processor bounds the effective interval.** At the default `Concurrency` of 1,
 one batch must finish before the next starts, so the effective interval is
-`max(BatchInterval, processor duration)`. Measured with a 50ms processor at 10k
-items/s:
+`max(BatchInterval, processor duration)`. A window below the processor duration buys
+nothing and can measure worse, because queueing dominates once the processor is the
+bottleneck.
+
+Measured with a 50ms processor at 10k items/s on darwin/arm64 (Apple M4 Pro, Go
+1.26.5, `GOMAXPROCS=12`):
 
 | Configured interval | Effective behaviour | p50 latency |
 | --- | --- | --- |
-| 5ms | bounded by the 50ms processor | **120ms** |
-| 100ms | bounded by the interval | **100ms** |
+| 5ms | bounded by the 50ms processor | ~120ms |
+| 100ms | bounded by the interval | ~100ms |
 
-The smaller interval is *worse*, because queueing dominates. If your processor is
-slow, raise `WithConcurrency` (with `WithoutOrderedProcessing`) rather than lowering
-the interval. With 8 workers, the same scenario measured a p50 latency of 4ms.
+`TestReproducesInlineSlowProcessorInversion` asserts the ordering — the smaller
+window is slower — and not these millisecond values, which are host-specific. If your
+processor is slow, raise `WithConcurrency` (with `WithoutOrderedProcessing`) rather
+than lowering the interval: `TestConcurrencyRemovesSlowProcessorCoupling` pins that
+8 workers reduce p50 against 1 worker in the same scenario, because workers add the
+capacity a shorter window cannot.
 
 ## FX Integration
 
