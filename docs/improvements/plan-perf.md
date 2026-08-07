@@ -373,11 +373,15 @@ conservation check, never an instantaneous API guarantee.
 is bounded by:
 
 ```text
-N + BatchSize + (concurrency × BatchSize) + P
+N + (1 + concurrency) × BatchSize + P
 ```
 
 where `P` is the number of publishers currently inside the gate, exposed as
-`Stats().PublishersInGate`. At `n = 1` there is no dispatch stage, so the
+`Stats().PublishersInGate`. The `(1 + concurrency)` term is deliberate: one batch
+is held by the aggregator after leaving the queue, and `concurrency` batches can
+be inside processors. Writing it as `BatchSize + concurrency × BatchSize`
+understates the peak by one batch, which at `n = 1` is a factor-of-two error on
+that term. At `n = 1` there is no dispatch stage, so the
 `concurrency × BatchSize` term collapses to the single inline batch already
 counted by `BatchSize`; the formula is therefore conservative rather than wrong
 at `n = 1`. `P` is bounded by the caller's own concurrency, not

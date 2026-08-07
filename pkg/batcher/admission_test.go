@@ -483,3 +483,72 @@ func saturate(t *testing.T, b *batcher.Batcher[int]) {
 
 	t.Fatal("bounded queue never filled; the capacity bound is not being enforced")
 }
+
+// TestAcceptedWorkBoundIncludesHeldAndInFlightBatches pins the documented capacity
+// bound, which is the number callers use to size memory.
+//
+// The bound is N + 2*BatchSize + publishers-in-gate at Concurrency 1, not
+// N + BatchSize: the aggregator holds a partial batch that has already left the
+// queue, and a second batch can be inside the processor simultaneously. Documenting
+// one batch understated the peak by a whole batch, so this asserts both that the
+// real bound is respected and that it genuinely exceeds the smaller figure.
+func TestAcceptedWorkBoundIncludesHeldAndInFlightBatches(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maxQueueSize = 4
+		batchSize    = 3
+	)
+
+	release := make(chan struct{})
+
+	var releaseOnce sync.Once
+
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+
+	b := batcher.New(
+		batcher.WithBatchSize[int](batchSize),
+		batcher.WithBatchInterval[int](time.Millisecond),
+		batcher.WithMaxQueueSize[int](maxQueueSize),
+		batcher.WithProcessor(func([]int) error {
+			<-release
+
+			return nil
+		}),
+	)
+
+	t.Cleanup(func() {
+		// Release first: cleanup runs after any failed assertion, and Close would
+		// otherwise wait its full grace for the blocked processor.
+		releaseAll()
+		_ = b.Close()
+	})
+
+	// Fill using deadline-bounded enqueues so no publisher stays parked in the gate,
+	// isolating the queue + held + in-flight terms. Stop at the first refusal: that
+	// is the saturation point, and continuing would only add timeout latency.
+	for range 64 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		err := b.Enqueue(ctx, 1)
+
+		cancel()
+
+		if err != nil {
+			break
+		}
+	}
+
+	stats := b.Stats()
+
+	documented := int64(maxQueueSize + 2*batchSize)
+
+	require.LessOrEqual(t, stats.Pending, documented+stats.PublishersInGate,
+		"accepted work must stay within N + 2*BatchSize + gate "+
+			"(pending=%d queued=%d gate=%d)",
+		stats.Pending, stats.Queued, stats.PublishersInGate)
+
+	require.Greater(t, stats.Pending, int64(maxQueueSize+batchSize),
+		"the peak must exceed N + BatchSize; if it did not, the documented bound "+
+			"would be describing a batcher that cannot hold a batch and process one "+
+			"at the same time")
+}

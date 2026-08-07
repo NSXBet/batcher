@@ -49,8 +49,14 @@ func WithSkipAutoStart[T any]() Option[T] {
 // Add blocks while the queue is full, and Enqueue can report the condition.
 //
 // Note this bounds queued items only. Total accepted-but-unfinished work is
-// bounded by N + BatchSize + publishers currently inside the publication window,
-// because a batch being processed has already left the queue.
+// bounded by:
+//
+//	N + 2*BatchSize + publishers currently inside the publication window
+//
+// Two batches, not one: the aggregator holds a partial batch that has left the
+// queue but not yet been dispatched, and a second batch can be inside the
+// processor at the same time. Sizing memory from N alone therefore understates
+// the peak by up to two batches.
 func WithMaxQueueSize[T any](maxQueueSize int) Option[T] {
 	return func(b *Batcher[T]) {
 		if maxQueueSize < 0 {
