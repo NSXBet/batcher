@@ -302,40 +302,97 @@ This allows you to:
 
 The batcher will be automatically started when the FX app starts and stopped when the app stops.
 
-## Tests
+## Developing batcher
 
-Just run `make unit` to run all tests.
+### Tests
 
-We strive to have 100% test coverage, but for now we're close to 95%. It will do for now.
-
-## Benchmarks
-
-Just run `make bench` to run all benchmarks.
-
-For the most up-to-date benchmarks in this repository, you can access [this
-page](https://nsxbet.github.io/batcher/dev/bench/). These results are run every time someone merges a PR into the main
-branch.
-
-Our benchmarks are divided by batch size and should look like this (actual results depend on your machine):
-
-```bash
-Running benchmarks...
-2024-06-07T00:21:10.619-0300    INFO    test/helpers.go:30        processing items {"count": 1000}
-goos: linux
-goarch: amd64
-pkg: github.com/NSXBet/batcher/pkg/batcher
-cpu: Intel(R) Core(TM) i9-14900KF
-BenchmarkBatcherBatchSize10-24           4588717         255.4 ns/op
-BenchmarkBatcherBatchSize100-24          5017683         254.8 ns/op
-BenchmarkBatcherBatchSize1_000-24        4721426         235.4 ns/op
-BenchmarkBatcherBatchSize10_000-24       4603827         245.5 ns/op
-BenchmarkBatcherBatchSize100_000-24      4848703         244.8 ns/op
-PASS
-ok      github.com/NSXBet/batcher/pkg/batcher     26.988s
+```sh
+make unit      # the test suite
+make guards    # what CI blocks on: race detector + allocation gates
 ```
 
-These benchmarks take into account the time it takes to add items to the batcher, not the time to process the batches as
-that will vary depending on the processor function you pass to the batcher.
+`make guards` runs `go test -race ./...` plus the allocation gates recorded in
+[`docs/improvements/thresholds.md`](./docs/improvements/thresholds.md) — the two
+signals stable enough to gate on shared CI runners. See
+[Contributing](#if-your-change-touches-performance) for when to run what.
+
+Coverage for `pkg/batcher` is enforced at 80% by CI. The scenario harness under
+`test/scenario` is excluded from that number: it is measurement infrastructure, not
+shipped code, and counting it would invite tests written to satisfy a percentage.
+
+### Measuring performance
+
+Performance work here is expected to be evidence-led, so the repository carries a
+measurement baseline rather than ad-hoc timing runs. There are two distinct tools,
+and using the wrong one produces confidently wrong numbers.
+
+#### Enqueue microbenchmarks — producer-side cost only
+
+```sh
+make bench-enqueue   # -benchmem -benchtime=3s -count=10, ready for benchstat
+```
+
+```text
+BenchmarkBatcherEnqueue/batch_size=10-12          ...  ns/op   ...  B/op  0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12         ...
+BenchmarkBatcherEnqueueParallel/batch_size=100-12 ...
+```
+
+These measure **only** the cost of `Add` returning. They deliberately exclude batch
+formation, the timer, and the processor, so they must never be reported as throughput
+or end-to-end latency. Compare runs with `benchstat`; a single run is not evidence:
+
+```sh
+make bench-enqueue > new.txt
+benchstat docs/improvements/baselines/enqueue-darwin-arm64.txt new.txt
+```
+
+Stored baselines live in `docs/improvements/baselines/` and record the toolchain and
+CPU they were captured on, because comparing across machines is meaningless.
+
+#### Scenario harness — end-to-end behaviour
+
+```sh
+go test ./test/scenario/            # correctness of the harness itself
+make bench-matrix                   # full reporting sweep (minutes, informational)
+```
+
+The harness (`test/scenario`) answers the questions Go benchmarks cannot. It is
+**open-loop**: arrival times are precomputed from a seeded schedule and are never
+gated on completion, so a slow system cannot suppress offered load. That property is
+what makes overload results trustworthy — a closed loop quietly stops offering work
+exactly when the system starts struggling.
+
+It reports distributions from raw samples rather than means:
+
+- end-to-end p50/p95/p99/p99.9/max, with admission blocking separated from queueing;
+- batch-size distribution, partial-batch fraction, downstream calls/s;
+- allocations per item, heap high-water, GC activity, peak queue depth;
+- **schedule lateness** — if the load generator itself fell behind, the run is marked
+  invalid instead of being reported as batcher latency.
+
+Two known defects are pinned as tests here, so a change that fixes one makes it fail
+on purpose; see [Contributing](#if-your-change-touches-performance).
+
+Guidelines that keep the numbers honest:
+
+- Never use `Join` as a completion signal in a measurement. Its 1ms polling cannot
+  resolve sub-10ms windows.
+- Build payloads outside the timed region.
+- Treat sub-millisecond windows as environment-sensitive; report them, do not gate on
+  them.
+
+#### CI lanes
+
+| Lane | Trigger | Blocking? |
+| --- | --- | --- |
+| Race detector + allocation gates | every PR | **yes** |
+| Scenario matrix and benchmark artifacts | scheduled / manual | no, informational |
+
+Latency percentiles are reported but never gated: measured spread on shared runners
+has exceeded the difference between the configurations under comparison, so a p99
+threshold there would fire on noise. Historical microbenchmark trends are published
+to [this page](https://nsxbet.github.io/batcher/dev/bench/).
 
 ## License
 
@@ -344,3 +401,71 @@ MIT.
 ## Contributing
 
 Feel free to open issues and send PRs.
+
+### Before you open a PR
+
+```sh
+make guards
+```
+
+That is what CI blocks on: the race detector plus the allocation gates in
+[`docs/improvements/thresholds.md`](./docs/improvements/thresholds.md). Everything
+else CI reports is informational.
+
+### If your change touches performance
+
+This repository keeps a **measurement baseline** so performance claims are backed by
+evidence rather than intuition. Please use it — a plausible-sounding optimisation has
+already been wrong here more than once.
+
+**1. Measure before you change anything.** Capture the current numbers so you have
+something to compare against:
+
+```sh
+make bench-enqueue > /tmp/before.txt
+```
+
+**2. Compare with `benchstat`, not by eye.** A single run is noise:
+
+```sh
+make bench-enqueue > /tmp/after.txt
+benchstat /tmp/before.txt /tmp/after.txt
+```
+
+Only compare runs from the same machine. Stored baselines in
+`docs/improvements/baselines/` record the toolchain and CPU they came from, precisely
+because cross-machine comparison is meaningless.
+
+**3. Use the right tool for the claim you are making.**
+
+| Claim | Use |
+| --- | --- |
+| "`Add` is cheaper" | `make bench-enqueue` — producer-side cost only |
+| "latency improved" | `test/scenario` harness — it measures end to end |
+| "batching is more efficient" | `test/scenario` — reports batch-size distribution and downstream calls/s |
+| "it survives overload" | `test/scenario` — open-loop, so load is not suppressed when the system slows |
+
+The enqueue benchmarks deliberately exclude batch formation and the processor, so they
+cannot support a latency or throughput claim. Reporting them as such is the most
+common way to be confidently wrong here.
+
+**4. Expect two tests to fail if you fix what they pin.** These encode known
+defects, not desired behaviour:
+
+| Test | Pins |
+| --- | --- |
+| `TestReproducesInlineSlowProcessorInversion` | A smaller batch window measures *worse* latency behind a slow processor at `Concurrency=1` |
+| `TestSmallWindowGivesNoOverloadProtection` | A smaller window does not bound queued work |
+
+If your change makes one fail, that is likely the change working. Say so in the PR
+and update the test to pin the new behaviour, rather than deleting it.
+
+**5. State what you measured, and on what.** Include the numbers, the command, and
+the environment (`go version`, OS/arch, `GOMAXPROCS`, CPU). A result without its
+environment cannot be reproduced or trusted.
+
+**6. If the evidence does not support the change, say so.** Recording that an
+optimisation did not help is a useful result and cheaper than discovering it later.
+Adaptive batch capacity in this repository was gated on exactly that kind of
+measurement, and an earlier estimator design was rejected because the numbers were
+worse than doing nothing.

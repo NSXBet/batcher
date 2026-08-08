@@ -1,4 +1,8 @@
-.PHONY: all clean
+# Every target here is command-only: none produces a file named after itself, so
+# all of them must be phony or Make will skip work whenever a same-named path exists.
+.PHONY: all clean ensure-build test unit bench bench-announce bench-run \
+	guards guards-race guards-allocs bench-enqueue bench-matrix \
+	coverage coverage-run coverage-report coverage-report-ci lint
 
 all: clean test coverage lint
 
@@ -22,6 +26,31 @@ bench-announce:
 
 bench-run:
 	@go test -bench=. ./...
+
+# Blocking performance guards: stable on shared runners, unlike latency.
+# Thresholds are predeclared in docs/improvements/thresholds.md.
+guards: guards-race guards-allocs
+
+guards-race:
+	@echo "Running race detector..."
+	@go test -race ./...
+
+guards-allocs:
+	@echo "Checking allocation gates..."
+	@go test -run 'Alloc' -count=1 -v ./... > /tmp/alloc-gate.txt 2>&1 || { cat /tmp/alloc-gate.txt; exit 1; }
+	@for want in TestAddAllocatesNothingPerCall TestHarnessRecorderDoesNotAllocatePerItem; do \
+		grep -q "^--- PASS: $$want" /tmp/alloc-gate.txt || { \
+			echo "allocation gate did not run $$want -- was it renamed?"; exit 1; }; \
+	done
+
+# Enqueue microbenchmarks with statistics suitable for benchstat.
+bench-enqueue:
+	@go test -run='^$$' -bench='BenchmarkBatcherEnqueue' -benchmem \
+		-benchtime=3s -count=10 ./pkg/batcher
+
+# Full reporting matrix. Informational: produces measurements, not pass/fail.
+bench-matrix:
+	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -count=1 -timeout 40m -v ./test/scenario/
 
 coverage: coverage-run coverage-report
 

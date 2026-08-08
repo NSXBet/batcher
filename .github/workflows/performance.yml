@@ -1,0 +1,100 @@
+---
+name: Performance
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  schedule:
+    # Weekly full matrix. Latency is reported here, never gated.
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  # Blocking lane. Gates only on signals that are stable on shared runners:
+  # correctness under the race detector and exact allocation counts.
+  # Latency percentiles are deliberately NOT gated here, because measured spread
+  # on GitHub-hosted runners has exceeded the difference between configurations.
+  guards:
+    name: Race and allocation guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Race detector
+        run: go test -race ./...
+      - name: Allocation gates
+        # Thresholds are predeclared in docs/improvements/thresholds.md.
+        #
+        # A -run substring that matches nothing exits 0, which would silently drop
+        # this gate if a test were renamed. Assert the expected tests actually ran.
+        run: |
+          go test -run 'Alloc' -count=1 -v ./... 2>&1 | tee /tmp/alloc-gate.txt
+          for want in TestAddAllocatesNothingPerCall \
+                      TestHarnessRecorderDoesNotAllocatePerItem; do
+            if ! grep -q -- "--- PASS: $want" /tmp/alloc-gate.txt; then
+              echo "allocation gate did not run $want -- was it renamed?"
+              exit 1
+            fi
+          done
+      - name: Enqueue microbenchmarks compile and run
+        run: |
+          go test -run='^$' -bench='BenchmarkBatcherEnqueue' \
+            -benchtime=100x -benchmem ./pkg/batcher
+  # Reporting lane. Produces the evidence used to choose a default batch window.
+  # Informational by design: it must never fail a pull request on timing.
+  matrix:
+    name: Scenario matrix (informational)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Record environment
+        run: |
+          {
+            echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "go: $(go version)"
+            echo "runner: ${{ runner.os }} ${{ runner.arch }}"
+            echo "nproc: $(nproc)"
+            echo "gomaxprocs: $(go env GOMAXPROCS)"
+            echo "cpu: $(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo)"
+            echo "commit: ${{ github.sha }}"
+          } > environment.txt
+          cat environment.txt
+      - name: Scenario matrix
+        env:
+          SCENARIO_MATRIX: "1"
+        run: |
+          go test -run TestScenarioMatrix -timeout 40m -v ./test/scenario/ \
+            | tee scenario-matrix.txt
+      # Produces benchstat input, but does not compare: no baseline recorded on this
+      # runner exists yet, and comparing against a developer machine's numbers would
+      # be meaningless. Trend comparison is deferred until a scheduled run has
+      # stored an ubuntu-latest/amd64 baseline. See docs/improvements/thresholds.md.
+      - name: Enqueue benchmarks with benchstat input
+        run: |
+          go test -run='^$' -bench='BenchmarkBatcherEnqueue' -benchmem \
+            -benchtime=2s -count=10 -cpu=1,2,4 ./pkg/batcher \
+            | tee enqueue-bench.txt
+      - name: Upload performance artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report
+          path: |
+            environment.txt
+            scenario-matrix.txt
+            enqueue-bench.txt
+          retention-days: 90

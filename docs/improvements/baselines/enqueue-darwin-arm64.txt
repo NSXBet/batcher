@@ -1,0 +1,72 @@
+# Enqueue microbenchmark baseline
+#
+# environment: go version go1.26.5 darwin/arm64 gomaxprocs=12 cpu=Apple M4 Pro
+# commit: 6d05236
+# note: local developer baseline, NOT the CI reference runner (ubuntu-latest/amd64).
+#
+goos: darwin
+goarch: arm64
+pkg: github.com/NSXBet/batcher/pkg/batcher
+cpu: Apple M4 Pro
+BenchmarkBatcherEnqueue/batch_size=10-12         	 9027432	       239.1 ns/op	     176 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10-12         	10288173	       233.9 ns/op	     170 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10-12         	 9796528	       213.9 ns/op	     175 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10-12         	13257355	       225.7 ns/op	     171 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10-12         	11826880	       280.7 ns/op	     179 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10-12         	 9833457	       219.1 ns/op	     175 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	12339294	       236.8 ns/op	     173 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	13952167	       231.6 ns/op	     176 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	11984150	       237.7 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	 8456338	       274.6 ns/op	     170 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	13100283	       265.0 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100-12        	12887620	       233.3 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	 8432460	       242.9 ns/op	     182 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	 9488770	       242.0 ns/op	     181 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	 8867065	       259.2 ns/op	     183 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	 7922353	       265.9 ns/op	     181 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	10002267	       250.0 ns/op	     182 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=1k-12         	11429668	       242.9 ns/op	     177 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	11858062	       244.0 ns/op	     182 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	 8765029	       250.3 ns/op	     173 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	10052694	       227.9 ns/op	     173 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	13201350	       272.2 ns/op	     173 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	 9473450	       244.3 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=10k-12        	 8907270	       239.3 ns/op	     177 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	 9293246	       240.7 ns/op	     233 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	 9429326	       238.9 ns/op	     236 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	 8868156	       236.5 ns/op	     242 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	 9299960	       237.3 ns/op	     241 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	 9164791	       244.9 ns/op	     239 B/op	       0 allocs/op
+BenchmarkBatcherEnqueue/batch_size=100k-12       	11389594	       247.2 ns/op	     240 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5344596	       430.9 ns/op	     179 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5533654	       435.6 ns/op	     169 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5616520	       426.8 ns/op	     172 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5846119	       404.5 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5650641	       431.3 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10-12 	 5244472	       415.4 ns/op	     175 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5771697	       406.6 ns/op	     173 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5395447	       399.0 ns/op	     171 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5556105	       398.8 ns/op	     174 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5801320	       409.5 ns/op	     185 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5592723	       399.4 ns/op	     186 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100-12         	 5603155	       413.1 ns/op	     189 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5736602	       389.2 ns/op	     174 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5427508	       406.1 ns/op	     179 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5455058	       418.7 ns/op	     167 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5393124	       410.0 ns/op	     174 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5276325	       420.9 ns/op	     174 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=1k-12          	 5526620	       407.9 ns/op	     182 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5637162	       410.4 ns/op	     190 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5247948	       401.4 ns/op	     186 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5132530	       430.0 ns/op	     181 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5545323	       413.4 ns/op	     195 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5606438	       410.5 ns/op	     180 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=10k-12         	 5617767	       395.6 ns/op	     175 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5463730	       417.9 ns/op	     305 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5388166	       448.2 ns/op	     295 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5420713	       426.6 ns/op	     288 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5490438	       418.9 ns/op	     293 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5428711	       426.7 ns/op	     299 B/op	       0 allocs/op
+BenchmarkBatcherEnqueueParallel/batch_size=100k-12        	 5396383	       424.1 ns/op	     296 B/op	       0 allocs/op
+PASS
+ok  	github.com/NSXBet/batcher/pkg/batcher	289.556s
