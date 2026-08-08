@@ -220,6 +220,44 @@ if err := b.Shutdown(ctx); err != nil {
 `Shutdown` is resumable: a later call waits on the same drain rather than starting
 a new one, so an expired deadline never costs you accepted work.
 
+### Concurrent processing and ordering
+
+By default, Batcher processes **one batch at a time**. This guarantees that a
+processor is never invoked concurrently and that a single producer's batches are
+processed in publication order. Use this default when the processor holds
+unsynchronised state or when cross-batch ordering matters.
+
+A slow processor can make a small batch window ineffective at this setting: a 5ms
+window behind a 50ms processor is effectively bounded by the processor.
+
+The per-item worst case is additive, not a maximum. The interval timer starts when a
+batch takes its first item, so while the aggregator is blocked handing the previous
+batch to the busy worker no timer is running. An item arriving in that window waits
+the remaining processor time *plus* a full interval.
+
+When the processor is goroutine-safe and cross-batch ordering does not matter,
+explicitly opt into worker concurrency:
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(processor),
+    batcher.WithConcurrency[Item](4),
+    batcher.WithoutOrderedProcessing[Item](), // required acknowledgement
+)
+```
+
+`WithoutOrderedProcessing` is deliberately required. `WithConcurrency(n > 1)`
+without it panics at construction, because concurrent processing gives up two
+properties callers may rely on:
+
+- batches may start, interleave, and complete in any order;
+- `processor` may be invoked concurrently, so it must be goroutine-safe.
+
+Items retain publication order **within** each batch at every concurrency. The
+worker dispatch is unbuffered, so `WithMaxQueueSize` continues to bound queued
+work; concurrency trades larger batches for more downstream calls, not an
+unbounded hidden dispatch queue.
+
 ### Back-pressure and rejection
 
 By default the queue is unbounded, which absorbs bursts well but turns a sustained

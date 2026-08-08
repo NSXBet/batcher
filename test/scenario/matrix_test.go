@@ -2,9 +2,11 @@ package scenario_test
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
+	"github.com/NSXBet/batcher/pkg/batcher"
 	"github.com/NSXBet/batcher/test/scenario"
 )
 
@@ -76,6 +78,43 @@ func TestScenarioMatrix(t *testing.T) {
 				Seed:           1,
 				LatenessBudget: 2 * time.Millisecond,
 			}))
+		}
+	}
+
+	// Phase 3 comparison: same slow downstream, serial versus acknowledged worker
+	// pool. This is the evidence used to decide whether a 5-10ms window is worth
+	// recommending for a service with processor-bound batches.
+	for _, workers := range []int{1, 2, 4, 8} {
+		options := []batcher.Option[scenario.Item](nil)
+		if workers > 1 {
+			options = []batcher.Option[scenario.Item]{
+				batcher.WithConcurrency[scenario.Item](workers),
+				batcher.WithoutOrderedProcessing[scenario.Item](),
+			}
+		}
+
+		for _, window := range []time.Duration{time.Millisecond, 5 * time.Millisecond, 10 * time.Millisecond, 100 * time.Millisecond} {
+			result := scenario.Run(scenario.Config{
+				Name:           "concurrency/n=" + itoa(workers),
+				BatchSize:      1_000,
+				BatchInterval:  window,
+				Arrival:        scenario.Steady(10_000, 2*time.Second),
+				Processor:      scenario.FixedProcessor(20 * time.Millisecond),
+				BatcherOptions: options,
+				Producers:      runtime.NumCPU(),
+				Warmup:         200 * time.Millisecond,
+				Seed:           1,
+				LatenessBudget: 2 * time.Millisecond,
+			})
+
+			if result.TimedOut {
+				t.Errorf("concurrency/n=%d window=%s timed out; excluded from the report",
+					workers, window)
+
+				continue
+			}
+
+			results = append(results, result)
 		}
 	}
 

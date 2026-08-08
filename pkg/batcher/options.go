@@ -99,3 +99,52 @@ func WithErrorBufferSize[T any](size int) Option[T] {
 		b.config.ErrorBufferSize = size
 	}
 }
+
+// WithConcurrency sets how many batches may be processed at once.
+//
+// The default is 1, which guarantees the processor is never invoked concurrently
+// and that batches are processed in publication order.
+//
+// Values above 1 require WithoutOrderedProcessing as well. Construction panics
+// otherwise: raising concurrency silently discards two guarantees callers may be
+// relying on, so the trade has to be acknowledged in the code that makes it, not
+// discovered in production. See WithoutOrderedProcessing for what is given up.
+//
+// Concurrency above 1 is what stops a slow processor from bounding the effective
+// batch interval. At n = 1 the steady-state flush interval is
+// max(BatchInterval, processor duration), because one batch must finish before the
+// next can start.
+//
+// Per-item worst case is worse than that maximum, and additive rather than a
+// maximum. While the aggregator is blocked handing a batch to the busy worker, the
+// interval timer is not running: it is armed only when the next batch takes its
+// first item. An item that arrives during the blocked window therefore waits the
+// remaining processor time *plus* a full BatchInterval.
+func WithConcurrency[T any](concurrency int) Option[T] {
+	return func(b *Batcher[T]) {
+		if concurrency < 1 {
+			concurrency = 1
+		}
+
+		b.config.Concurrency = concurrency
+	}
+}
+
+// WithoutOrderedProcessing acknowledges that concurrent processing gives up
+// ordering guarantees. It changes no behaviour on its own.
+//
+// It exists purely so that enabling concurrency is explicit about its cost. With
+// WithConcurrency(n) for n > 1:
+//
+//   - batches may start, interleave, and complete in any order;
+//   - the processor may be invoked concurrently, so it must be goroutine-safe.
+//
+// What is retained at any concurrency:
+//
+//   - items keep publication order *within* each batch;
+//   - every accepted item is processed exactly once by the pool itself.
+func WithoutOrderedProcessing[T any]() Option[T] {
+	return func(b *Batcher[T]) {
+		b.config.UnorderedProcessingAcknowledged = true
+	}
+}

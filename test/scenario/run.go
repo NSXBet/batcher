@@ -45,6 +45,13 @@ type Config struct {
 	Arrival   Arrival
 	Processor Processor
 
+	// BatcherOptions are applied after the harness's batch size, interval and
+	// processor options. They make the same open-loop scenario usable across
+	// implementation modes, such as the acknowledged worker pool in Phase 3.
+	// The harness owns Item, so callers cannot accidentally configure a batcher
+	// for a different payload type.
+	BatcherOptions []batcher.Option[Item]
+
 	// Producers is how many goroutines offer the schedule concurrently.
 	//
 	// The schedule is partitioned round-robin, so the *set* of offer times is
@@ -237,17 +244,33 @@ func Run(cfg Config) Result {
 		completedItems  atomic.Int64
 		completedSignal = make(chan struct{}, 1)
 
-		procRNG = rand.New(rand.NewSource(cfg.Seed))
-		start   time.Time
+		// procRNG is guarded because BatcherOptions may enable worker concurrency,
+		// and math/rand.Rand is not goroutine-safe. JitteredProcessor and
+		// SlowOutlierProcessor read it from inside the processor, so several workers
+		// can call it at once; the matrix sweep does exactly that. Without the mutex
+		// the race detector fires in math/rand.(*rngSource).Uint64 and the service
+		// times become undefined, which would silently invalidate the measurement.
+		procRNGMu sync.Mutex
+		procRNG   = rand.New(rand.NewSource(cfg.Seed))
+		start     time.Time
 	)
 
-	b := batcher.New(
+	// serviceTime keeps the lock around the RNG read only, not around the sleep, so
+	// concurrent workers still overlap their simulated downstream latency.
+	serviceTime := func(batchSize int) time.Duration {
+		procRNGMu.Lock()
+		defer procRNGMu.Unlock()
+
+		return cfg.Processor.ServiceTime(procRNG, batchSize)
+	}
+
+	options := []batcher.Option[Item]{
 		batcher.WithBatchSize[Item](cfg.BatchSize),
 		batcher.WithBatchInterval[Item](cfg.BatchInterval),
 		batcher.WithProcessor(func(items []Item) error {
 			procStart := int64(time.Since(start))
 
-			if d := cfg.Processor.ServiceTime(procRNG, len(items)); d > 0 {
+			if d := serviceTime(len(items)); d > 0 {
 				time.Sleep(d)
 			}
 
@@ -273,7 +296,11 @@ func Run(cfg Config) Result {
 
 			return cfg.Processor.Err
 		}),
-	)
+	}
+
+	options = append(options, cfg.BatcherOptions...)
+
+	b := batcher.New(options...)
 
 	// Drain diagnostics so an erroring processor cannot grow memory unboundedly
 	// during the run.
