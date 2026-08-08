@@ -41,9 +41,12 @@ the blocking signal rather than timings.
 | Recovery wrapper allocations, non-panic | exactly 0                                    | `TestRecoveredPanicAddsNoSteadyStateAllocations`              |
 | Scenario recorder allocations per item  | ≤ 1 total, and must not grow with run length | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
 | Goroutines per running batcher, `n=1`   | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
+| `Stats()` allocations                   | exactly 0                                    | `TestStatsIsAllocationFree`                                   |
 
-`Stats()` is a fixed set of atomic loads returning a value type, so it has no
-allocation gate of its own; the `Add` gate covers the hot path that matters.
+`Stats()` returns a value type built from atomic loads plus one queue length check
+under the queue's existing mutex. It now carries its own allocation gate, because
+metrics scraping runs continuously in production and generating garbage per scrape
+would be a real cost.
 
 The recorder threshold is not "exactly 0" because `AllocsPerItem` measures the
 whole pipeline, including Batcher's own per-batch allocations, not just the
@@ -104,10 +107,44 @@ zero leaked.
 
 ## Conditional gates (Milestone 4.2 only)
 
-| Gate                                       | Threshold                    |
-| ------------------------------------------ | ---------------------------- |
-| Sparse-window allocated bytes/flush        | > 2 KB/flush to justify work |
-| Allocation regression ceiling, any scenario | ≤ +2% allocated bytes        |
+| Gate                                        | Threshold                    | Measured        |
+| ------------------------------------------- | ---------------------------- | --------------- |
+| Sparse-window allocated bytes/flush         | > 2 KB/flush to justify work | 55,944 B/flush  |
+| Allocation regression ceiling, any scenario | ≤ +2% allocated bytes        | +1.12% (worst)  |
+
+Milestone 4.2 was **triggered and implemented**. Sparse-window waste measured far
+above the justification threshold: at a 1ms window with `BatchSize=1000` the
+aggregator reserved 55,944 B/flush to hold a single item, and 559,944 B/flush at
+`BatchSize=10000`.
+
+Results per workload, adaptive versus the previous full-capacity strategy:
+
+| Workload                | Change  |
+| ----------------------- | ------- |
+| steady sparse           | -97.9%  |
+| small batches           | -93.3%  |
+| full batches (control)  | -0.00%  |
+| alternating sparse/full | +1.12%  |
+| burst after idle        | -72.2%  |
+| bimodal                 | -3.45%  |
+
+The alternating case is the one that killed the rejected EWMA estimator, which
+allocated *more* than doing nothing there. Recent-max keeps it inside the +2%
+budget.
+
+These figures are **measured evidence, not an enforced gate.** `BenchmarkCapacity*`
+reports allocated bytes for each workload but does not compare them against the +2%
+limit, and `capacity_test.go` asserts estimator behaviour (bounds, adaptation,
+decay) rather than allocation deltas. Re-check the numbers with:
+
+```sh
+go test -run='^$' -bench='BenchmarkCapacity' -benchmem -count=1 ./pkg/batcher
+```
+
+Turning this into a gate needs a stored allocation baseline for the reference
+runner, which does not exist yet for the same reason the throughput gate is still
+advisory. Until then, a regression here is caught by reading the benchmark output,
+not by CI.
 
 The second gate must hold for alternating sparse/full, burst-after-idle, and
 bimodal workloads, not just the sparse case the optimisation targets. An

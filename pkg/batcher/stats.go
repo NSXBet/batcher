@@ -41,6 +41,12 @@ type Stats struct {
 	// the aggregator. This is the queue depth to alert on.
 	Queued int64
 
+	// BatchHeld is items owned by the aggregator: they have left the intake queue
+	// but have not yet entered a worker. This includes items accumulating in the
+	// current partial batch and a flushed batch blocked on the unbuffered worker
+	// dispatch channel. It is distinct from Queued and InFlight.
+	BatchHeld int64
+
 	// InFlight is items currently inside a processor call. It is updated by workers
 	// on batch boundaries, not on the enqueue path, so observability does not add
 	// another contended producer atomic.
@@ -62,6 +68,14 @@ type Stats struct {
 	// expired.
 	Rejected uint64
 
+	// BatchesFlushed counts batches emitted by the aggregator, in batches rather
+	// than items. After a terminal drain, (Completed + Failed + Panicked) /
+	// BatchesFlushed gives the mean batch size. All terminal outcomes are included:
+	// a processor failure or recovered panic does not make its batch disappear from
+	// the coalescing figure. A mean far below BatchSize means the window is closing
+	// on the timer rather than on size.
+	BatchesFlushed uint64
+
 	// DroppedErrors counts diagnostics discarded because the Errors() buffer was
 	// full. A non-zero value means diagnostics are being lost, not that batches
 	// failed: it is a signal that Errors() is not being drained fast enough.
@@ -76,15 +90,17 @@ type Stats struct {
 // contended atomics per Add measured up to 4x the cost of one, so nothing is added
 // to the hot path without a reason.
 type counters struct {
-	pending       atomic.Int64
-	intakePending atomic.Int64
-	accepted      atomic.Uint64
-	inFlight      atomic.Int64
-	completed     atomic.Uint64
-	failed        atomic.Uint64
-	panicked      atomic.Uint64
-	rejected      atomic.Uint64
-	droppedErrors atomic.Uint64
+	pending        atomic.Int64
+	intakePending  atomic.Int64
+	accepted       atomic.Uint64
+	batchHeld      atomic.Int64
+	inFlight       atomic.Int64
+	completed      atomic.Uint64
+	failed         atomic.Uint64
+	panicked       atomic.Uint64
+	batchesFlushed atomic.Uint64
+	rejected       atomic.Uint64
+	droppedErrors  atomic.Uint64
 }
 
 // reserve claims a drain obligation before publication.
@@ -112,9 +128,27 @@ func (c *counters) accept() {
 	c.accepted.Add(1)
 }
 
-// received records the aggregator taking an item out of the queue.
+// received records the aggregator taking an item out of the queue and into the
+// batch it is currently accumulating.
+//
+// This is a transfer, not a decrement: the item stops being queued and starts
+// being aggregator-held, so both counters move together. Decrementing intake
+// alone would make the item invisible in every field between leaving the queue
+// and entering a worker.
 func (c *counters) received(n int) {
 	c.intakePending.Add(int64(-n))
+	c.batchHeld.Add(int64(n))
+}
+
+// dispatched records a batch leaving the aggregator for a worker.
+//
+// batchHeld is released here rather than when the processor returns, because
+// inFlight takes ownership at that point; counting both would double-count the
+// batch. It runs once per batch on the aggregation path, so it adds no per-item
+// producer cost.
+func (c *counters) dispatched(n int) {
+	c.batchHeld.Add(int64(-n))
+	c.batchesFlushed.Add(1)
 }
 
 // terminal records exactly one outcome for a finished batch and releases its
