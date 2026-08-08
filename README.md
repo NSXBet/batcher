@@ -236,8 +236,9 @@ b := batcher.New(
 )
 
 if err := b.Enqueue(ctx, item); err != nil {
-    // batcher.ErrClosing  -> shutting down
-    // ctx.Err()           -> queue full and the caller's deadline expired
+    // batcher.ErrClosing            -> shutting down
+    // context.DeadlineExceeded      -> queue stayed full until the deadline passed
+    // context.Canceled              -> queue was full and the caller cancelled
     return err
 }
 ```
