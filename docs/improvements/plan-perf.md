@@ -161,7 +161,7 @@ must be validated during implementation rather than assumed.
 
 ### Publisher gate
 
-```
+```text
 enter():  if sealed -> reject
           gate++
           if sealed -> leave(); reject      // ALL decrements route through leave()
@@ -205,7 +205,7 @@ an atomic multi-field `Stats()` snapshot transactional.
 
 The equations have explicit scopes:
 
-```
+```text
 // Exact after publisher quiescence (gateEmpty), before terminal completion:
 Accepted == Completed + Failed + Panicked + Pending
 
@@ -226,7 +226,7 @@ the publication window.
 
 ### Publication and hot-path atomic budget
 
-```
+```text
 enter():                       // gate: 1 seal load, gate++, 1 seal re-check load
 Add / Enqueue entry:
   Pending++ ; IntakePending++  // reserve before publication
@@ -281,7 +281,7 @@ the coordinator supplies that knowledge explicitly via a `noInput` channel. The
 aggregator selects on input and on `noInput`; there is **no polling and no
 busy-wait** in steady state.
 
-```
+```text
 Shutdown():
   1. sealed = true
   2. close(sealCh)                  // release publishers blocked on a full queue
@@ -318,7 +318,7 @@ owned-queue prototype re-validates the same gate at `n=0` and `n=4`.
 **Intake termination is by intake accounting.** After `noInput` closes, the
 aggregator drains on `IntakePending` rather than on an empty-queue observation:
 
-```
+```text
 <-noInput
 for IntakePending > 0 { drainReady() }   // owned queue: a publish is immediately visible
 flush()                                  // final partial batch, exactly once
@@ -372,7 +372,7 @@ conservation check, never an instantaneous API guarantee.
 `WithMaxQueueSize(N)` bounds queued items. Total accepted-but-not-terminal work
 is bounded by:
 
-```
+```text
 N + BatchSize + (concurrency × BatchSize) + P
 ```
 
@@ -488,7 +488,13 @@ Scenario matrix: windows `500µs, 1, 2, 5, 10, 20, 50, 100ms` × arrivals
 - Blocking PR lane: `go test -race ./...` plus allocation-count assertions via
   `testing.AllocsPerRun` for `Add`, `Enqueue`, and the recovery wrapper.
 - Scheduled/manual lane: full scenario matrix, artifacts published, trend
-  comparison via `benchstat -count=10`.
+  comparison via `benchstat`. Collection and comparison are separate steps —
+  `-count` is a `go test` flag, not a `benchstat` one:
+
+  ```sh
+  go test -run='^$' -bench=. -benchmem -count=10 ./... > new.txt
+  benchstat old.txt new.txt
+  ```
 - Record predeclared numeric thresholds in a checked-in file, keyed by Go version
   and architecture. Initial values, to be re-baselined on the chosen reference
   runner in this milestone:
@@ -1105,7 +1111,7 @@ rather than intuition.
 
 ## Sequencing summary
 
-```
+```text
 Mandatory path:
   1.1 ──► 1.2 ──► 1.3
   2.1 ──► 2.2 ──► 2.3 ──► 2.4 ──► 3.1 ──► 3.2 ──► 4.1 ──► 5.1 ──► 5.2 ──► 5.3

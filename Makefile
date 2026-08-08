@@ -1,4 +1,8 @@
-.PHONY: all clean
+# Every target here is command-only: none produces a file named after itself, so
+# all of them must be phony or Make will skip work whenever a same-named path exists.
+.PHONY: all clean ensure-build test unit bench bench-announce bench-run \
+	guards guards-race guards-allocs bench-enqueue bench-matrix \
+	coverage coverage-run coverage-report coverage-report-ci lint
 
 all: clean test coverage lint
 
@@ -46,7 +50,7 @@ bench-enqueue:
 
 # Full reporting matrix. Informational: produces measurements, not pass/fail.
 bench-matrix:
-	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -timeout 40m -v ./test/scenario/
+	@SCENARIO_MATRIX=1 go test -run TestScenarioMatrix -count=1 -timeout 40m -v ./test/scenario/
 
 coverage: coverage-run coverage-report
 

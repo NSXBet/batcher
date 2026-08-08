@@ -237,9 +237,8 @@ func Run(cfg Config) Result {
 		completedItems  atomic.Int64
 		completedSignal = make(chan struct{}, 1)
 
-		procRNG     = rand.New(rand.NewSource(cfg.Seed))
-		start       time.Time
-		goroutinePk = runtime.NumGoroutine()
+		procRNG = rand.New(rand.NewSource(cfg.Seed))
+		start   time.Time
 	)
 
 	b := batcher.New(
@@ -302,12 +301,15 @@ func Run(cfg Config) Result {
 	// drain would report a recovered process and hide the peak backlog, which is
 	// precisely the number overload scenarios need.
 	var (
-		heapPeak    atomic.Uint64
-		pendingPeak atomic.Int64
-		samples     atomic.Int64
-		samplerDone = make(chan struct{})
-		samplerStop = make(chan struct{})
+		heapPeak      atomic.Uint64
+		pendingPeak   atomic.Int64
+		goroutinePeak atomic.Int64
+		samples       atomic.Int64
+		samplerDone   = make(chan struct{})
+		samplerStop   = make(chan struct{})
 	)
+
+	goroutinePeak.Store(int64(runtime.NumGoroutine()))
 
 	go func() {
 		defer close(samplerDone)
@@ -335,6 +337,13 @@ func Run(cfg Config) Result {
 
 				if depth := int64(b.Len()); depth > pendingPeak.Load() {
 					pendingPeak.Store(depth)
+				}
+
+				// Sample goroutines here rather than after wg.Wait: producers have
+				// exited by then, so the peak could never include them and every
+				// concurrent scenario under-reported by cfg.Producers.
+				if n := int64(runtime.NumGoroutine()); n > goroutinePeak.Load() {
+					goroutinePeak.Store(n)
 				}
 			}
 		}
@@ -376,10 +385,6 @@ func Run(cfg Config) Result {
 	wg.Wait()
 	offeredFor := time.Since(start)
 
-	if n := runtime.NumGoroutine(); n > goroutinePk {
-		goroutinePk = n
-	}
-
 	totalAccepted := 0
 	for _, n := range accepted {
 		totalAccepted += n
@@ -418,7 +423,7 @@ func Run(cfg Config) Result {
 	<-errsDone
 
 	result := summarise(cfg, slots, batches, offeredFor, runDuration,
-		memBefore, memAfter, goroutinePk, heapPeak.Load(), pendingPeak.Load(),
+		memBefore, memAfter, int(goroutinePeak.Load()), heapPeak.Load(), pendingPeak.Load(),
 		samples.Load())
 
 	result.OfferedFor = offeredFor
