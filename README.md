@@ -365,7 +365,7 @@ pays up to one interval per hop.
 
 Expected batch size is approximately **min(arrival rate x interval, BatchSize)**.
 The arrival-rate term is measured, not estimated: at 10,000 items/s with a 10ms
-interval it predicts 100 items per batch, and the measured mean is 100.
+interval it predicts 100 items per batch, and the measured mean is ~101.
 
 `BatchSize` is the binding constraint whenever it fills first, and the interval then
 never fires. With the default `BatchSize` of 1,000, a service at 50,000 items/s

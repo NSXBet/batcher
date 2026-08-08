@@ -100,9 +100,11 @@ the sizing rule below.
 ## Evidence 2: the sizing rule holds
 
 Expected batch size ≈ `arrival rate × window`. Measured at 10k/s with a 10ms window:
-**predicted 100, measured 100** (100 batches, 99 calls/s). Asserted in
-`TestDefaultWindowCoalescingHoldsAtRate`, because the tuning guidance is only
-trustworthy if this relationship is real.
+**predicted 100, measured ~101** (99 calls/s), matching the ~101 in the 10k/s table
+above. Asserted in `TestDefaultWindowCoalescingHoldsAtRate`, because the tuning
+guidance is only trustworthy if this relationship is real. The test asserts the
+measurement lands within a factor of two of the prediction rather than pinning 101,
+since the exact figure moves with host scheduling.
 
 ## Evidence 3: a smaller window does not worsen overload
 
@@ -168,8 +170,10 @@ b := batcher.New(
 )
 ```
 
-The default cannot know your downstream cost. What it can avoid is silently adding
-up to a second of latency per hop, which the old default did.
+The default cannot know your downstream cost, which is why it is left alone. Setting
+10ms is what avoids the up-to-one-second per-hop latency; the unchanged 1s default
+still carries it, and that is the trade a caller accepts by not configuring an
+interval.
 
 **A service that needs overload protection.** No interval provides it. Under
 saturation every window from 10ms to 1s accepted ~200k/s while completing ~199k/s,
@@ -217,11 +221,19 @@ drain, which is the fastest way to confirm what an interval change did to your o
 coalescing:
 
 ```go
+// Take the snapshot after the drain completes. BatchesFlushed increments when a batch
+// is dispatched, while the terminal counters increment when the processor returns, so
+// a snapshot taken under load divides finished items by dispatched batches and
+// undercounts the mean.
+if err := b.Shutdown(ctx); err != nil {
+    return err
+}
+
 s := b.Stats()
 
 // Include every terminal outcome: a failed or panicked batch was still flushed, so
 // dividing by Completed alone undercounts whenever the processor errors.
-if s.BatchesFlushed > 0 {
+if s.Pending == 0 && s.BatchesFlushed > 0 {
     meanBatch := float64(s.Completed+s.Failed+s.Panicked) / float64(s.BatchesFlushed)
     log.Printf("mean batch size: %.1f", meanBatch)
 }
