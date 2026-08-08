@@ -298,7 +298,10 @@ s := b.Stats()
 //   s.InFlight  -> inside a processor call
 
 // Totals.
-//   s.Pending        -> accepted work not yet finished, including in-flight batches
+//   s.Pending        -> conservative drain obligation: accepted-or-reserved work,
+//                       including in-flight batches. It counts publishers that have
+//                       reserved but not yet published, so it equals
+//                       accepted-but-unfinished work only once PublishersInGate == 0
 //   s.Accepted       -> successful enqueues
 //   s.Rejected       -> refused enqueues
 //   s.Completed / s.Failed / s.Panicked -> mutually exclusive terminal outcomes

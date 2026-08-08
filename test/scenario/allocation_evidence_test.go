@@ -15,12 +15,19 @@ import (
 // capacity for.
 //
 // This exists to decide whether 4.2 should be implemented at all. The plan gates it
-// on sparse-window allocation pressure above 2 KB/flush; the aggregator allocates
-// make([]T, 0, BatchSize) per batch, so the theoretical waste is
-// (BatchSize - actual) * sizeof(T) per flush.
+// on sparse-window allocation pressure above 2 KB/flush.
 //
-// Report-only: it prints evidence and never fails, because it is an input to a
-// decision rather than a gate.
+// The "bytes/flush (est)" column is the PRE-ADAPTIVE BASELINE, deliberately kept
+// after 4.2 landed: it is (BatchSize - actual) * sizeof(T), the waste a fixed
+// make([]T, 0, BatchSize) reservation would incur. The aggregator now reserves
+// capacities.capacity() instead, so this column reports the waste adaptive capacity
+// removed rather than waste that remains. It is the figure the milestone is measured
+// against, which is why it is not recomputed from the current reservation.
+//
+// The measurements are report-only: no allocation threshold is asserted, because the
+// numbers are an input to a decision rather than a gate. The scenario's own validity
+// is still enforced -- a run that timed out is not evidence of anything, so
+// result.TimedOut fails the test.
 func TestSparseWindowAllocationEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -45,7 +52,7 @@ func TestSparseWindowAllocationEvidence(t *testing.T) {
 	}
 
 	t.Logf("%-26s %-11s %-9s %-12s %s",
-		"scenario", "mean_batch", "batches", "allocs/item", "bytes/flush (est)")
+		"scenario", "mean_batch", "batches", "allocs/item", "bytes/flush (pre-4.2 est)")
 
 	for _, c := range cases {
 		result := scenario.Run(scenario.Config{
@@ -60,8 +67,9 @@ func TestSparseWindowAllocationEvidence(t *testing.T) {
 		require.False(t, result.TimedOut,
 			"%s: scenario timed out; allocation evidence is invalid", c.name)
 
-		// scenario.Item is the harness payload; the aggregator reserves
-		// BatchSize slots of it per flush regardless of how many arrive.
+		// scenario.Item is the harness payload. BatchSize, not the adaptive estimate,
+		// is deliberately used here: this reproduces what a fixed reservation would
+		// have cost, which is the baseline 4.2 is compared against.
 		itemSize := float64(unsafe.Sizeof(scenario.Item{}))
 
 		wastePerFlush := float64(c.batchSize-int(result.MeanBatchSize)) * itemSize
