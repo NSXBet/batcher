@@ -151,6 +151,35 @@ bimodal workloads, not just the sparse case the optimisation targets. An
 EWMA-of-mean estimator was rejected precisely because it regressed alternating
 traffic to 2.80 MB against 1.64 MB for the current full-capacity strategy.
 
+## Coverage
+
+`pkg/batcher` statement coverage is enforced at 80% by CI and currently sits at
+**96.2%**. The scenario harness under `test/` is excluded, since it is measurement
+infrastructure rather than shipped code.
+
+The number matters less than what is covered. Every lifecycle interleaving that could
+hang, panic, or lose accepted work has a dedicated test, and the ones guarding a race
+or deadlock are sabotage-verified: the mechanism is removed and the test must fail.
+Verified this way so far:
+
+| Mechanism | Sabotage result |
+| --- | --- |
+| Coordinator post-seal gate check | `Shutdown` hangs |
+| `enter()` rejection routed through `leave()` | quiescence never signalled |
+| Per-batch panic recovery | process crashes |
+| `BatchHeld` ownership transfer | field never populated |
+| Dispatch accounting | flush and terminal counts wrong |
+| Option freeze guard | data race under `-race` |
+| Runtime config snapshot | data race under `-race` |
+| `Start` construction guard | data race inside `New` under `-race` |
+| Queue capacity bound | `tryPush` grows past the bound |
+| Queue seal release | blocked publisher never released |
+| Blocking `Add` release on shutdown | caller hangs indefinitely |
+
+A concurrency test that cannot fail is worse than no test, because it manufactures
+confidence. If a future change adds one of these guarantees, add the sabotage check
+with it.
+
 ## Baselines
 
 Stored benchmark baselines live in `docs/improvements/baselines/`.

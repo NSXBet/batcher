@@ -1149,7 +1149,10 @@ rather than intuition.
 - Run the full matrix against the completed implementation.
 - Publish the decision and its evidence.
 - Change `DefaultBatchInterval` only if p99 latency, batching efficiency,
-  allocation, and overload behaviour all support it.
+  allocation, and overload behaviour all support it. **Outcome: not changed.** Latency
+  supports 10ms strongly, but the downstream call-rate cost at sparse traffic falls on
+  callers who never configured an interval, so the value is recommended explicitly
+  instead.
 
 **Acceptance criteria**
 
@@ -1206,6 +1209,12 @@ valid stopping point:
   are 2 with none leaked.
 - Stopping after **3.x**: small windows are honoured under slow processors.
 - Stopping after **4.x**: operators can see overload developing.
+- Stopping after **5.x**: the compatibility story is published, the tuning guidance
+  is measured rather than asserted, and `DefaultBatchInterval` stays 1s while 10ms is
+  published as the recommended explicit setting. The gate above required latency,
+  batching efficiency, allocation *and* overload behaviour to support a change; the
+  downstream call rate at sparse traffic (~1/s to ~94/s at 1k items/s) does not, so
+  the evidence in `default-window.md` ships as guidance rather than as a new default.
 
 ## Conclusion
 

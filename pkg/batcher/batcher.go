@@ -53,6 +53,14 @@ type Batcher[T any] struct {
 	// struct a caller may still hold a reference to.
 	runtime runtimeConfig[T]
 
+	// constructed becomes true at the end of New. Start is inert before that.
+	//
+	// Option is an arbitrary func(*Batcher[T]), so a caller can pass one that calls
+	// Start during New's option loop. Without this guard the aggregator would launch
+	// while New was still assigning fields such as input, which is a data race
+	// inside the library triggered by caller code.
+	constructed atomic.Bool
+
 	gate     *admissionGate
 	counters counters
 
@@ -145,6 +153,11 @@ func New[T any](options ...Option[T]) *Batcher[T] {
 	b.input = newQueue[T](b.config.MaxQueueSize)
 	b.errorsChan = make(chan error, b.config.ErrorBufferSize)
 
+	// Everything the pipeline touches is now assigned, so Start may launch it. A
+	// Start attempted earlier -- from a hostile or buggy Option -- was a no-op, and
+	// this is where that stops being true.
+	b.constructed.Store(true)
+
 	if !b.config.SkipAutoStart {
 		b.Start()
 	}
@@ -179,7 +192,23 @@ func (b *Batcher[T]) validateConfig() {
 // the drain needs a consumer to make progress. Declining to start here would leave
 // the drain waiting on a consumer that never exists, which deadlocks shutdown when
 // Start and Shutdown race.
+//
+// Start panics if called before New has finished constructing the batcher, which is
+// reachable only from inside an Option, since Option is an arbitrary
+// func(*Batcher[T]). Starting there would launch the aggregator against fields New
+// has not assigned yet — a data race inside the library. It panics rather than
+// ignoring the call because a caller who wrote Start meant it, and silently doing
+// nothing would leave them believing a batcher is running when it is not.
 func (b *Batcher[T]) Start() {
+	if !b.constructed.Load() {
+		panic("batcher: Start called before construction finished. " +
+			"Option is an arbitrary func(*Batcher[T]), so an option that calls " +
+			"Start runs while New is still assigning fields, and starting the " +
+			"aggregator there is a data race on the queue. Do not call Start from " +
+			"an Option: New starts the batcher itself unless WithSkipAutoStart is " +
+			"given, in which case call Start after New returns.")
+	}
+
 	b.startOnce.Do(func() {
 		b.gate.state.CompareAndSwap(stateNew, stateRunning)
 

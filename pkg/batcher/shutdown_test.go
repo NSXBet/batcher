@@ -400,3 +400,21 @@ func TestNonReturningProcessorKeepsBatcherDraining(t *testing.T) {
 	require.False(t, b.IsClosed(),
 		"a batcher whose processor never returns is draining, not closed")
 }
+
+// TestShutdownIncompleteErrorFormatting pins the public error contract: callers
+// inspect it with errors.Is/As, but logs and lifecycle tools also surface Error().
+func TestShutdownIncompleteErrorFormatting(t *testing.T) {
+	t.Parallel()
+
+	err := &batcher.ShutdownIncompleteError{
+		Pending:          7,
+		PublishersInGate: 2,
+		Cause:            context.DeadlineExceeded,
+	}
+
+	require.Equal(t,
+		"batcher shutdown incomplete: 7 pending, 2 publishers still admitting: context deadline exceeded",
+		err.Error())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, batcher.ErrTimeout)
+}
