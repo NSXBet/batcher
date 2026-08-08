@@ -23,7 +23,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
         with:
-          go-version: "stable"
+          # Match the module floor exactly; "stable" makes benchmark history
+          # change when a new Go release appears without a repository change.
+          go-version-file: go.mod
       - name: Run benchmark
         run: make ensure-build && make bench-run | tee build/output.txt
       - name: Store benchmark result

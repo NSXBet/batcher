@@ -39,8 +39,12 @@ func main() {
             return nil
         }),
     )
-    // stop the batcher
-    defer batcher.Close()
+    // stop the batcher, and report if the drain did not finish in time
+    defer func() {
+        if err := batcher.Close(); err != nil {
+            fmt.Printf("shutdown incomplete: %v\n", err)
+        }
+    }()
 
     // add operations to the batcher
     for i := 0; i < 1000; i++ {
@@ -171,15 +175,89 @@ if err := batcher.Join(timeout); err != nil {
 
 ### Stopping the batcher
 
-To stop the batcher you can use the `StopProcessing` function:
+To stop the batcher, use `Close`:
 
 ```go
-defer batcher.Close()
+defer func() {
+    if err := batcher.Close(); err != nil {
+        // The drain did not finish within the grace period. Work is still being
+        // processed in the background, so decide deliberately: wait longer with
+        // Shutdown, or accept that the process is about to exit with work pending.
+        log.Printf("batcher shutdown incomplete: %v", err)
+    }
+}()
 
-// batcher.IsClosed() == true after this point
+// batcher.IsClosed() == true once the drain has completed
 ```
 
-This function is safe to be called multiple times as it will only stop the processor once.
+`Close` seals admission and drains work that has already been accepted, waiting up
+to 30 seconds by default (configurable with `WithCloseGrace`). It is safe to call
+multiple times and from multiple goroutines.
+
+If the grace period expires, `Close` reports that the drain is incomplete — it does
+**not** discard the remaining work, which keeps being processed in the background.
+Do not write a bare `defer batcher.Close()`: it discards that report, and if the
+process exits immediately afterwards, accepted work is lost without any signal.
+
+When you need to control the wait, or to keep waiting after a timeout, use
+`Shutdown`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+if err := b.Shutdown(ctx); err != nil {
+    var incomplete *batcher.ShutdownIncompleteError
+    if errors.As(err, &incomplete) {
+        // Still draining. Nothing was lost, and we can wait longer.
+        log.Printf("%d items still pending", incomplete.Pending)
+
+        err = b.Shutdown(context.Background())
+    }
+}
+```
+
+`Shutdown` is resumable: a later call waits on the same drain rather than starting
+a new one, so an expired deadline never costs you accepted work.
+
+### Back-pressure and rejection
+
+By default the queue is unbounded, which absorbs bursts well but turns a sustained
+overload into unbounded memory growth. Note that shrinking the batch interval does
+**not** bound queued work — only bounding the queue does.
+
+To get back-pressure instead, bound the queue and use `Enqueue`, which reports why
+an item was refused:
+
+```go
+b := batcher.New(
+    batcher.WithProcessor(processor.Process),
+    batcher.WithMaxQueueSize[Item](10_000),
+)
+
+if err := b.Enqueue(ctx, item); err != nil {
+    // batcher.ErrClosing            -> shutting down
+    // context.DeadlineExceeded      -> queue stayed full until the deadline passed
+    // context.Canceled              -> queue was full and the caller cancelled
+    return err
+}
+```
+
+`Add` remains available as the fast path for best-effort use: it returns no error,
+and after shutdown it is a counted no-op rather than a panic.
+
+### Observing a batcher
+
+`Stats` returns an allocation-free snapshot suitable for frequent scraping:
+
+```go
+s := b.Stats()
+
+// s.Queued        -> queue depth; the value to alert on
+// s.Pending       -> accepted work not yet finished, including in-flight batches
+// s.Rejected      -> refused enqueues
+// s.DroppedErrors -> diagnostics lost because Errors() was not drained
+```
 
 ### Handling Errors
 

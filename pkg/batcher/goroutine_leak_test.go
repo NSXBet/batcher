@@ -10,13 +10,13 @@ import (
 
 	"github.com/NSXBet/batcher/pkg/batcher"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
+	"sync/atomic"
 )
 
 // TestBatcher_GoroutineCleanupOnStop is the main regression test for goroutine leaks.
 // It reproduces the issue where goroutines remain blocked after Close() is called.
 func TestBatcher_GoroutineCleanupOnStop(t *testing.T) {
-	processCount := atomic.NewInt32(0)
+	var processCount atomic.Int32
 
 	processor := func(items []string) error {
 		count := processCount.Add(1)
@@ -85,7 +85,7 @@ func TestBatcher_GoroutineCleanupOnStop(t *testing.T) {
 
 // TestBatcher_StopWithPendingMessages tests that pending messages don't block goroutine cleanup.
 func TestBatcher_StopWithPendingMessages(t *testing.T) {
-	processedBatches := atomic.NewInt32(0)
+	var processedBatches atomic.Int32
 
 	processor := func(items []string) error {
 		processedBatches.Add(1)
@@ -139,7 +139,7 @@ func TestBatcher_StopWithPendingMessages(t *testing.T) {
 
 // TestBatcher_StopWhileProcessing tests cleanup when the processor is actively working.
 func TestBatcher_StopWhileProcessing(t *testing.T) {
-	processing := atomic.NewBool(false)
+	var processing atomic.Bool
 	processingDone := make(chan struct{})
 
 	processor := func(items []string) error {
@@ -206,7 +206,7 @@ func TestBatcher_StopWhileProcessing(t *testing.T) {
 
 // TestBatcher_StopWithFailingProcessor tests cleanup when the processor consistently fails.
 func TestBatcher_StopWithFailingProcessor(t *testing.T) {
-	processCount := atomic.NewInt32(0)
+	var processCount atomic.Int32
 
 	processor := func(items []string) error {
 		processCount.Add(1)
@@ -319,9 +319,24 @@ func TestBatcher_RapidStartStopCycles(t *testing.T) {
 
 // TestBatcher_CloseTimeoutBehavior tests that Close() doesn't block forever.
 func TestBatcher_CloseTimeoutBehavior(t *testing.T) {
-	// Processor that never returns
+	// A processor that never returns. The library cannot cancel user code, so the
+	// contract is that Close reports an incomplete drain rather than hanging
+	// forever or pretending the work finished.
+	release := make(chan struct{})
+	defer close(release)
+
+	// Signalled by the processor itself. Waiting on Stats().Pending would only prove
+	// work is pending, not that the processor has been entered, so Close could race
+	// ahead of processing and the in-flight case would go uncovered.
+	entered := make(chan struct{})
+
+	var enterOnce sync.Once
+
 	processor := func(items []string) error {
-		time.Sleep(10 * time.Minute) // Intentionally long
+		enterOnce.Do(func() { close(entered) })
+
+		<-release
+
 		return nil
 	}
 
@@ -329,17 +344,22 @@ func TestBatcher_CloseTimeoutBehavior(t *testing.T) {
 		batcher.WithBatchSize[string](5),
 		batcher.WithBatchInterval[string](10*time.Millisecond),
 		batcher.WithProcessor(processor),
+		// Keep the test fast: the grace period is what bounds Close, and its exact
+		// value is configuration rather than behaviour.
+		batcher.WithCloseGrace[string](500*time.Millisecond),
 	)
 
-	// Add items to trigger processing
 	for i := 0; i < 5; i++ {
 		b.Add(fmt.Sprintf("msg-%d", i))
 	}
 
-	// Wait for processing to start
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the processor to be entered, so the batch really is in flight.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the processor was never entered")
+	}
 
-	// Close() should return within a reasonable time, even though processor is blocked
 	closeStart := time.Now()
 	closeDone := make(chan error, 1)
 
@@ -352,10 +372,15 @@ func TestBatcher_CloseTimeoutBehavior(t *testing.T) {
 		closeDuration := time.Since(closeStart)
 		t.Logf("Close() completed in %v with error: %v", closeDuration, err)
 
-		// Close should complete within a reasonable timeout (not 10 minutes)
-		if closeDuration > 10*time.Second {
-			t.Errorf("Close() took too long: %v", closeDuration)
-		}
+		require.ErrorIs(t, err, batcher.ErrTimeout,
+			"a blocked processor must be reported as an incomplete drain")
+		require.Less(t, closeDuration, 5*time.Second,
+			"Close must be bounded by its grace period, not by the processor")
+
+		// The drain was reported incomplete, not abandoned: the batcher is still
+		// draining, so it must not claim to be closed.
+		require.True(t, b.IsClosing(), "admission must be sealed")
+		require.False(t, b.IsClosed(), "a batcher with work still in flight is not closed")
 
 	case <-time.After(15 * time.Second):
 		t.Fatal("Close() blocked for more than 15 seconds - this is unacceptable")

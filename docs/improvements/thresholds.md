@@ -12,9 +12,17 @@ reported by the scenario matrix and compared as a trend; it never fails a PR.
 
 Thresholds are keyed to the environment. Re-baseline when any of these change.
 
+The Go version is whatever `go.mod` declares: CI resolves it with
+`go-version-file: go.mod` rather than a hardcoded string, so this row and the
+toolchain cannot drift apart. Phase 2 raised the floor from 1.22.4 to 1.25.0 when
+`golang.org/x/sys` was updated.
+
+Stored baselines record the toolchain they were captured on in their own header,
+which is what makes them comparable or not; see Baselines below.
+
 | Field      | Value                                    |
 | ---------- | ---------------------------------------- |
-| Go version | 1.22.4                                   |
+| Go version | 1.25.0 (from `go.mod`)                   |
 | Runner     | `ubuntu-latest` (GitHub-hosted, mutable) |
 | Arch       | `amd64`                                  |
 
@@ -27,12 +35,15 @@ orientation only and are not gates.
 Allocation counts are stable even on noisy shared runners, which is why they are
 the blocking signal rather than timings.
 
-| Gate                                    | Threshold | Enforced by                              |
-| --------------------------------------- | --------- | ---------------------------------------- |
-| `Add` allocations, unbounded path       | exactly 0 | `TestAddAllocatesNothingPerCall`         |
-| `Stats()` allocations                   | exactly 0 | added with `Stats()` in Phase 2          |
-| Recovery wrapper allocations, non-panic | exactly 0 | added with panic recovery in Phase 2     |
+| Gate                                    | Threshold                                    | Enforced by                                                   |
+| --------------------------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| `Add` allocations, unbounded path       | exactly 0                                    | `TestAddAllocatesNothingPerCall`                              |
+| Recovery wrapper allocations, non-panic | exactly 0                                    | `TestRecoveredPanicAddsNoSteadyStateAllocations`              |
 | Scenario recorder allocations per item  | ≤ 1 total, and must not grow with run length | `TestHarnessRecorderDoesNotAllocatePerItem` (`test/scenario`) |
+| Goroutines per running batcher          | exactly 2                                    | `TestGoroutineBudgetPerRunningBatcher`                        |
+
+`Stats()` is a fixed set of atomic loads returning a value type, so it has no
+allocation gate of its own; the `Add` gate covers the hot path that matters.
 
 The recorder threshold is not "exactly 0" because `AllocsPerItem` measures the
 whole pipeline, including Batcher's own per-batch allocations, not just the
@@ -40,12 +51,12 @@ recorder. Measured values are 0.03-0.04 allocations per item and do not grow wit
 run length, which is the property that matters: a recorder that allocated per item
 would make every allocation figure it reports a measurement of itself.
 
-`Add` currently allocates 0 per call in the timed region because the item is
-constructed by the caller. Phase 2 replaces `chann` with a slice-backed unbounded
-queue, at which point the gate becomes "zero allocations per `Add` in steady
-state": `append` must allocate when it grows its backing array, so the gate is
-measured after a stated warmup with queue capacity retained across drains, and
-growth-path allocations are the one named exemption.
+`Add` allocates 0 per call in the timed region because the item is constructed by
+the caller. Phase 2 replaced `chann` with a slice-backed unbounded queue, so the
+gate is now "zero allocations per `Add` in steady state": `append` must allocate
+when it grows its backing array, so the gate is measured after a stated warmup
+with queue capacity retained across drains, and growth-path allocations are the
+one named exemption.
 
 ## Throughput gate (advisory until CI baseline exists)
 
@@ -55,18 +66,46 @@ growth-path allocations are the one named exemption.
 
 Compare with `benchstat` over `-count=10`. A single run is not evidence. This is advisory until a scheduled run stores an ubuntu-latest/amd64 baseline; the current workflow uploads raw input but intentionally does not fail on this threshold.
 
-## Goroutine gates (blocking, from Phase 2 onward)
+## Goroutine gates (blocking)
 
-| Gate                                | Threshold                          |
-| ----------------------------------- | ---------------------------------- |
-| Goroutines per idle batcher         | exactly 0                          |
-| Goroutines per running `n=1`        | exactly 1 (aggregator)             |
-| Goroutines per running `n>1`        | exactly 1 + n                      |
-| Goroutines after terminal `closed`  | equal to pre-construction baseline |
+These are the gates in force today. They must agree with the allocation table
+above, which enforces the same running-batcher count.
 
-Current `main` owns 6 goroutines per batcher: 1 aggregator, 2 `rill` pipeline
-relays, and 2 `chann` relays plus the pipeline's batch goroutine. Phase 2.1
-removes `rill` (6 → 3) and Phase 2.2 removes `chann` (3 → 1).
+| Gate                               | Threshold                                 |
+| ---------------------------------- | ----------------------------------------- |
+| Goroutines per unstarted batcher   | exactly 0                                 |
+| Goroutines per running batcher     | exactly 2 (aggregator + serial processor) |
+| Goroutines after terminal `closed` | equal to pre-construction baseline        |
+
+Enforced by `TestGoroutineBudgetPerRunningBatcher`.
+
+Phase 3 introduces explicit worker concurrency and will replace the single
+running-batcher row with `1 + n` (aggregator plus workers). That row is
+deliberately absent here rather than stated as a gate, because a threshold for a
+configuration this code cannot express is not enforceable — and two rows claiming
+different counts for the same batcher is worse than one row that is merely
+incomplete.
+
+Current `main` owns 6 goroutines per batcher. Phase 2.1 removed `rill`
+(**measured 6 → 5**) and Phase 2.2 removed both `chann` relays and the input
+forwarder they required (**measured 5 → 2**: aggregator plus processor), enforced
+by `TestGoroutineBudgetPerRunningBatcher`.
+
+Removing the relays also removed a channel hop and a goroutine handoff per item.
+Measured against the stored baseline: **-54% geomean sec/op** on the enqueue
+microbenchmarks (`Add` 229.8ns → 63.4ns at small batch sizes) and -49% to -90%
+bytes/op. This is the one place in the plan where a safety change also made the
+hot path materially faster.
+
+The 6 → 5 figure supersedes earlier 6 → 3 and 6 → 4 estimates. Fewer goroutines
+were unreachable without changing observable behaviour: merging aggregation into
+the processing loop inverted the documented latency baseline, and merging input
+draining into aggregation regressed sequential `Add` by 39-50% because the
+`chann` relay's bounded ingress was not drained promptly.
+
+Both earlier estimates assumed aggregation and processing could share one
+goroutine. They cannot without changing observable latency, which is why the
+enforced count is 2 rather than 1.
 
 ## Conditional gates (Milestone 4.2 only)
 

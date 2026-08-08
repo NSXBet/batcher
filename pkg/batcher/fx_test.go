@@ -1,11 +1,11 @@
 package batcher_test
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
@@ -18,11 +18,11 @@ type BatchItem struct {
 }
 
 type Processor struct {
-	counter *atomic.Uint32
+	counter atomic.Uint32
 }
 
 func NewProcessor() *Processor {
-	return &Processor{counter: atomic.NewUint32(0)}
+	return &Processor{}
 }
 
 func (p *Processor) Process(items []*BatchItem) error {

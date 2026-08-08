@@ -9,7 +9,7 @@ import (
 	"github.com/NSXBet/batcher/internal/test"
 	"github.com/NSXBet/batcher/pkg/batcher"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
+	"sync/atomic"
 )
 
 func TestCanCreateBatcherWithDefaultConfig(t *testing.T) {
@@ -234,8 +234,8 @@ func TestFlushOnClose(t *testing.T) {
 
 func TestProcessesEntireBatchesIfTimerHasNotExpired(t *testing.T) {
 	// ARRANGE
-	batches := atomic.NewInt32(0)
-	processed := atomic.NewInt32(0)
+	var batches atomic.Int32
+	var processed atomic.Int32
 
 	b := batcher.New(
 		batcher.WithBatchSize[test.BatchItem](5),
