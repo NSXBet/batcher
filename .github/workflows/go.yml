@@ -22,7 +22,7 @@ permissions:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +33,7 @@ jobs:
       - run: go build -v ./...
   test:
     name: Unit tests
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,7 +45,7 @@ jobs:
         run: go test -v ./...
   vet:
     name: Vet and formatting
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +65,7 @@ jobs:
           fi
   coverage:
     name: Coverage
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:

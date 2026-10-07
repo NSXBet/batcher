@@ -9,7 +9,7 @@ permissions: read-all
 jobs:
   codeql:
     # CodeQL runs on ubuntu-latest, windows-latest, and macos-latest
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     permissions:
       # required for all workflows
       security-events: write
