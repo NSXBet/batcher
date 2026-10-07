@@ -18,7 +18,7 @@ jobs:
   # on GitHub-hosted runners has exceeded the difference between configurations.
   guards:
     name: Race and allocation guards
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +52,7 @@ jobs:
   matrix:
     name: Scenario matrix (informational)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - uses: actions/checkout@v4
         with:

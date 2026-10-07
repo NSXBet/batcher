@@ -9,7 +9,7 @@ jobs:
     permissions:
       contents: read
       statuses: write
-    runs-on: ubuntu-latest
+    runs-on: self-hosted-amd64
     steps:
       - name: Go Report Card
         uses: nsx-actions/creekorful_goreportcard-action@v1.0
